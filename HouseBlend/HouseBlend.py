@@ -13,7 +13,7 @@ https://opensource.org/licenses/MIT
 
 __author__ = "Scot Wheeler"
 __license__ = "MIT"
-__version__ = "0.3.0"
+__version__ = "0.3.2"
 
 import numpy as np
 import cvxpy as cp
@@ -23,6 +23,10 @@ import os
 from faker import Faker
 import warnings
 
+
+def min_periods(n_people):
+    min_periods = n_people - (n_people % 2 == 0)  # the minimum number of periods required for everyone to meet everyone else
+    return min_periods
 
 def test_n_people(test):
     participant_names = []
@@ -157,10 +161,17 @@ def import_schedules(folderpath=None,
     return schedule, bool_schedule
 
 
-def period_meeting_list(contacts, bool_schedule, period, full=True, save=False):
+def period_meeting_list(contacts, bool_schedule, period, full=True,
+                        save=False, folderpath=None):
     """
     Generate dataframe containing all pairs of people scheduled to meet in a given period.
     """
+    save_name = f'period_{period}_meeting_list.xlsx'
+    if folderpath is None:
+        save_path = os.path.join(parent_fullpath, save_name)
+    else:
+        save_path = os.path.join(folderpath, save_name)
+    
     idxs, jdxs = np.where(bool_schedule[:, :, period - 1] == 1)
     persons1 = contacts.index[idxs]
     persons2 = contacts.index[jdxs]
@@ -175,7 +186,7 @@ def period_meeting_list(contacts, bool_schedule, period, full=True, save=False):
                                         'Assistant\'s emails': ["{}; {}".format(a1, a2) for a1, a2 in zip(contacts.loc[persons1, "Assistant email"].values, contacts.loc[persons2, "Assistant email"].values)]
                                         })
         if save:
-            period_meetings.to_excel(f'/content/drive/MyDrive/CoffeeClub/period_{period}_meeting_list.xlsx')
+            period_meetings.to_excel(save_path)
     else:
         period_meetings = pd.DataFrame({'Person 1': persons1, 'Person 2': persons2})
 
@@ -195,21 +206,21 @@ def generate_meeting_schedule(contacts, bool_schedule, save=True,
     periods = bool_schedule.shape[2]
     schedule = pd.DataFrame("", index=contacts.index, columns=["Period {}".format(x) for x in range(1, periods + 1)])
     for k in range(periods):
-        paired_person = period_meeting_person(contacts, bool_schedule, k + 1, contacts.index.values)
+        paired_person = period_meeting_person(contacts, bool_schedule, k + 1, contacts.index.values, folderpath=folderpath)
         schedule.loc[:, "Period {}".format(k + 1)] = paired_person
     if save:
         schedule.to_excel(save_path)
     return schedule
 
 
-def period_meeting_person(contacts, bool_schedule, period, persons):
+def period_meeting_person(contacts, bool_schedule, period, persons, folderpath=None):
     """
     Return the person who is scheduled to meet with a given person in a given period.
     """
     if isinstance(persons, str):
         persons = [persons]
     paired_persons = []
-    period_pairs = period_meeting_list(contacts, bool_schedule, period, full=False)
+    period_pairs = period_meeting_list(contacts, bool_schedule, period, full=False, folderpath=folderpath)
     for person in persons:
         mask = period_pairs == person
         if mask.sum().sum() == 0:
@@ -260,7 +271,7 @@ def generate_boolean_schedule(schedule):
     Generates boolean schedule from imported schedule dataframe.
     """
     n_people = int(schedule.shape[0])
-    n_periods = int(schedule.shape[0])
+    n_periods = int(schedule.shape[1])
     bool_schedule = np.zeros((n_people, n_people, n_periods))
     for k in range(n_periods):
         idxs = schedule.index.get_indexer(schedule["Period {}".format(k + 1)].values)
@@ -271,7 +282,9 @@ def generate_boolean_schedule(schedule):
     return bool_schedule
 
 
-def run_schedule_optimisation(contacts, bool_schedule, n_periods, availability, current_period=1, verbose=False):
+def run_schedule_optimisation(contacts, bool_schedule, n_periods, availability,
+                              current_period=1, verbose=False,
+                              multiple_meetings='strict'):
     # determine shape of schedule variable
     n_people = contacts.shape[0]
     if isinstance(n_periods, type(None)):
@@ -308,48 +321,61 @@ def run_schedule_optimisation(contacts, bool_schedule, n_periods, availability, 
             constraints.append(X[:, :, k] == bool_schedule[:, :, k])
 
     # =============================================================================
-    #   Relaxation to allow multiple meetings
+    #   Dealing with multiple meetings
+    #   multiple_meetings = strict:
+    #       only 1 meeting allowed
     # =============================================================================
-    # introducing a penalty for multiple meetings
-    # To model X[i,j,k] * X[i,j,l] which is not DCP-compliant when X is boolean, you can introduce a new auxiliary binary variable Z[i,j,k,l] and enforce constraints that approximate this product:
-    Z = cp.Variable((n_people, n_people, total_periods, total_periods), boolean=True)
-
-    for i in range(n_people):
-        for j in range(i):
-            for k in range(total_periods):
-                for l in range(k + 1, total_periods):
-                    # Enforce Z[i,j,k,l] = X[i,j,k] AND X[i,j,l]
-                    constraints += [
-                        Z[i, j, k, l] <= X[i, j, k],
-                        Z[i, j, k, l] <= X[i, j, l],
-                        Z[i, j, k, l] >= X[i, j, k] + X[i, j, l] - 1,
-                    ]
-
-    penalty_terms = []
-
-    for i in range(n_people):
-        for j in range(i):
-            for k in range(total_periods):
-                for l in range(k + 1, total_periods):
-                    penalty = penalty_weighting(abs(k - l), max_penalty=1, decay_rate=0.1)
-                    penalty_terms.append(penalty * Z[i, j, k, l])
-
-    ## obective from V0.2.0
-    # objective = cp.Maximize(cp.sum(X) - cp.sum(cp.hstack(penalty_terms)))
     
-    ## new objective for V0.3.0 that penalises there being no meetings
-    objective = cp.Maximize(cp.sum(X) - cp.sum(cp.hstack(penalty_terms))- total_periods * ((total_periods * n_people**2) - cp.sum(X)))
+    if multiple_meetings == "strict":
+        # Each meeting between two persons can only happen at most once
+        for i in range(n_people):
+            for j in range(n_people):
+                constraints.append(cp.sum(X[i, j, :]) <= 1)
+        objective = cp.Maximize(cp.sum(X) )
+        
+    elif multiple_meetings == 'penalty':
+        pass
+    
+    elif multiple_meetings == "penaltytime":
+    
+        # =============================================================================
+        #   Relaxation to allow multiple meetings
+        # =============================================================================
+        # only relevant if n_periods > 1
+        if total_periods > 1:
+            # introducing a penalty for multiple meetings
+            # To model X[i,j,k] * X[i,j,l] which is not DCP-compliant when X is boolean, you can introduce a new auxiliary binary variable Z[i,j,k,l] and enforce constraints that approximate this product:
+            Z = cp.Variable((n_people, n_people, total_periods, total_periods), boolean=True)
+        
+            for i in range(n_people):
+                for j in range(i):
+                    for k in range(total_periods):
+                        for l in range(k + 1, total_periods):
+                            # Enforce Z[i,j,k,l] = X[i,j,k] AND X[i,j,l]
+                            constraints += [
+                                Z[i, j, k, l] <= X[i, j, k],
+                                Z[i, j, k, l] <= X[i, j, l],
+                                Z[i, j, k, l] >= X[i, j, k] + X[i, j, l] - 1,
+                            ]
+        
+            penalty_terms = []
+        
+            for i in range(n_people):
+                for j in range(i):
+                    for k in range(total_periods):
+                        for l in range(k + 1, total_periods):
+                            penalty = penalty_weighting(abs(k - l), max_penalty=1, decay_rate=0.1)
+                            penalty_terms.append(penalty * Z[i, j, k, l])
+        
+            ## obective from V0.2.0
+            # objective = cp.Maximize(cp.sum(X) - cp.sum(cp.hstack(penalty_terms)))
+            
+            ## new objective for V0.3.0 that penalises there being no meetings
+            objective = cp.Maximize(cp.sum(X) - cp.sum(cp.hstack(penalty_terms)) - total_periods * ((total_periods * n_people**2) - cp.sum(X)))
 
-    # =============================================================================
-    #   Hard constraint such that each meeting between two persons can only happen at most once
-    #   Comment out code in section above
-    # =============================================================================
-    # Each meeting between two persons can only happen at most once
-    # this could be removed if replaced by a historic weighting where previous meetings are given a negative score based on how long ago the meeting happened - calculated in teh objective function
-    # for i in range(n_people):
-    #     for j in range(n_people):
-    #         constraints.append(cp.sum(X[i, j, :]) <= 1)
-    # objective = cp.Maximize(cp.sum(X) )
+        else:
+            objective = cp.Maximize(cp.sum(X) )
+    
 
     # Solve the problem
     warnings.filterwarnings('ignore')
