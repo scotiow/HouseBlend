@@ -97,7 +97,9 @@ def test_import_files(folderpath, filename, test, n_periods):
         n_periods = contacts.shape[0] - (contacts.shape[0] % 2 == 0)  # the number periods (e.g. weeks if meetings are weekly) in the season
 
     start_date = (dt.datetime.today() + dt.timedelta(days=(7 - dt.datetime.today().weekday()))).date()
-    period_dates = pd.DataFrame({"Date": pd.date_range(start_date, periods=n_periods, freq='2W').values}, index=list(range(1, n_periods + 1)))
+    period_dates = pd.DataFrame({"Start Date": pd.date_range(start_date, periods=n_periods, freq='2W').values,
+                                 "End Date": pd.date_range(start_date+dt.timedelta(days=14), periods=n_periods, freq='2W').values},
+                                index=list(range(1, n_periods + 1)))
     period_dates.index.name = "Period"
 
     availability = pd.DataFrame({})
@@ -161,8 +163,8 @@ def import_schedules(folderpath=None,
     return schedule, bool_schedule
 
 
-def period_meeting_list(contacts, bool_schedule, period, full=True,
-                        save=False, folderpath=None):
+def period_meeting_list(contacts, bool_schedule, period, dates,
+                        full=True, save=False, folderpath=None):
     """
     Generate dataframe containing all pairs of people scheduled to meet in a given period.
     """
@@ -183,7 +185,9 @@ def period_meeting_list(contacts, bool_schedule, period, full=True,
                                         'Person 2 assistant': contacts.loc[persons2, "Assistant"].values,
                                         'Person 1 assistant email': contacts.loc[persons1, "Assistant email"].values,
                                         'Person 2 assistant email': contacts.loc[persons2, "Assistant email"].values,
-                                        'Assistant\'s emails': ["{}; {}".format(a1, a2) for a1, a2 in zip(contacts.loc[persons1, "Assistant email"].values, contacts.loc[persons2, "Assistant email"].values)]
+                                        'Assistant\'s emails': ["{}; {}".format(a1, a2) for a1, a2 in zip(contacts.loc[persons1, "Assistant email"].values, contacts.loc[persons2, "Assistant email"].values)],
+                                        'Start Date': dates.loc[period, "Start Date"],
+                                        'End Date': dates.loc[period, "End Date"]
                                         })
         if save:
             period_meetings.to_excel(save_path)
