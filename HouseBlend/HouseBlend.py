@@ -13,7 +13,7 @@ https://opensource.org/licenses/MIT
 
 __author__ = "Scot Wheeler"
 __license__ = "MIT"
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 import numpy as np
 import cvxpy as cp
@@ -25,8 +25,23 @@ import warnings
 
 
 def min_periods(n_people):
+    """
+    Calculate the minimum number of periods required that allows everyone to meet everyone else.
+
+    Parameters
+    ----------
+    n_people : int
+        The number of participants.
+
+    Returns
+    -------
+    min_periods : int
+        The minimum number of periods required that allows everyone to meet everyone else.
+
+    """
     min_periods = n_people - (n_people % 2 == 0)  # the minimum number of periods required for everyone to meet everyone else
     return min_periods
+
 
 def test_n_people(test):
     participant_names = []
@@ -43,12 +58,14 @@ def test_n_people(test):
     return contacts
 
 
-def import_contacts_df(folderpath=None, filename='contacts.xlsx', test=False, n_periods=None):
+def import_contacts_df(folderpath=None, filename='contacts.xlsx',
+                       test=False, n_periods=None):
     """
-    Import contacts dataframe from excel if exits. Otherwise create testing version.
-    """
+    Import participant input dataframe from excel if exits.
 
-    if test != False:
+    Create testing version if test set to True or int.
+    """
+    if test is not False:
         return test_import_files(folderpath, filename, test, n_periods)
 
     if folderpath is None:
@@ -59,12 +76,29 @@ def import_contacts_df(folderpath=None, filename='contacts.xlsx', test=False, n_
     if os.path.exists(filepath):
         print("Importing contacts")
 
-        contacts = pd.read_excel(filepath, index_col=0, sheet_name="Participants")
+        contacts = pd.read_excel(
+            filepath,
+            index_col=0,
+            sheet_name="Participants"
+        )
 
-        dates = pd.read_excel(filepath, index_col=0, sheet_name="Dates")
+        dates = pd.read_excel(
+            filepath,
+            index_col=0,
+            sheet_name="Dates"
+        )
 
-        availability = pd.read_excel(filepath, index_col=0, sheet_name="Availability")
-        availability_all = pd.DataFrame(np.ones((contacts.shape[0], dates.shape[0])), index=contacts.index, columns=dates.index)
+        availability = pd.read_excel(
+            filepath,
+            index_col=0,
+            sheet_name="Availability"
+        )
+
+        availability_all = pd.DataFrame(
+            np.ones((contacts.shape[0], dates.shape[0])),
+            index=contacts.index,
+            columns=dates.index
+        )
         unavail_mask = availability == 0
         availability_all.loc[unavail_mask.index, unavail_mask.columns] = availability_all.loc[unavail_mask.index, unavail_mask.columns].where(~unavail_mask, other=0)
 
@@ -86,7 +120,7 @@ def test_import_files(folderpath, filename, test, n_periods):
         os.remove(filepath)
 
     if test == True:
-        test=5
+        test = 5
 
     # if you specify a test number, it creates a set of n random strings
     print("Creating new contact directory of {} length for testing".format(test))
@@ -98,7 +132,7 @@ def test_import_files(folderpath, filename, test, n_periods):
 
     start_date = (dt.datetime.today() + dt.timedelta(days=(7 - dt.datetime.today().weekday()))).date()
     period_dates = pd.DataFrame({"Start Date": pd.date_range(start_date, periods=n_periods, freq='2W').values,
-                                 "End Date": pd.date_range(start_date+dt.timedelta(days=14), periods=n_periods, freq='2W').values},
+                                 "End Date": pd.date_range(start_date + dt.timedelta(days=14), periods=n_periods, freq='2W').values},
                                 index=list(range(1, n_periods + 1)))
     period_dates.index.name = "Period"
 
@@ -163,8 +197,147 @@ def import_schedules(folderpath=None,
     return schedule, bool_schedule
 
 
-def period_meeting_list(contacts, bool_schedule, period, dates,
-                        full=True, save=False, folderpath=None):
+def create_mailto_link(row, subject=None):
+    to = f"{row['Person 1 assistant email']};{row['Person 2 assistant email']}"
+    cc = f"{row['Person 1 email']};{row['Person 2 email']}"
+    link = f"mailto:{to}?cc={cc}"
+    if subject:
+        link += f"&subject={subject.replace(' ', '%20')}"
+    return link
+
+
+def get_first_name(name):
+    if isinstance(name, str) and name.strip():
+        return name.strip().split()[0]
+    return ""
+
+def format_date_with_suffix(date):
+    # Ensure it's a datetime object
+    if pd.isnull(date):
+        return None
+    date = pd.to_datetime(date)
+    day = date.day
+    # Get suffix
+    if 10 <= day % 100 <= 20:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
+    return date.strftime(f"%A {day}{suffix} %B %Y")
+
+
+def export_for_mailmerge(contacts, bool_schedule, period, dates,
+                        save=False, folderpath=None, save_prefix="HouseBlend", subject=None):
+    """
+    Export data for a particular period to be used in an Office based Mail Merge.
+    
+    See README for description of mailmerge usage.
+
+    Parameters
+    ----------
+    contacts : TYPE
+        DESCRIPTION.
+    bool_schedule : TYPE
+        DESCRIPTION.
+    period : TYPE
+        DESCRIPTION.
+    dates : TYPE
+        DESCRIPTION.
+    save : TYPE, optional
+        DESCRIPTION. The default is False.
+    folderpath : TYPE, optional
+        DESCRIPTION. The default is None.
+    subject : TYPE, optional
+        DESCRIPTION. The default is None.
+
+    Returns
+    -------
+    None.
+
+    """
+    save_name = f'{save_prefix}_period_{period}_mailmerge.xlsx'
+    if folderpath is None:
+        save_path = os.path.join(parent_fullpath, save_name)
+    else:
+        save_path = os.path.join(folderpath, save_name)
+
+    idxs, jdxs = np.where(bool_schedule[:, :, period - 1] == 1)
+    persons1 = contacts.index[idxs]
+    persons2 = contacts.index[jdxs]
+
+    period_meetings = pd.DataFrame({'Person 1': persons1, 'Person 2': persons2,
+                                    'Person 1 email': contacts.loc[persons1, "email"].values,
+                                    'Person 2 email': contacts.loc[persons2, "email"].values,
+                                    'Person 1 assistant': contacts.loc[persons1, "Assistant"].values,
+                                    'Person 2 assistant': contacts.loc[persons2, "Assistant"].values,
+                                    'Person 1 assistant email': contacts.loc[persons1, "Assistant email"].values,
+                                    'Person 2 assistant email': contacts.loc[persons2, "Assistant email"].values,
+                                    # 'All emails': ["{}; {}".format(a1, a2) for a1, a2 in zip(contacts.loc[persons1, "Assistant email"].values, contacts.loc[persons2, "Assistant email"].values)],
+                                    'Start Date': dates.loc[period, "Start Date"].strftime('%d/%m/%Y'),
+                                    'End Date': dates.loc[period, "End Date"].strftime('%d/%m/%Y')
+                                    })
+    period_meetings["Mailto Link"] = period_meetings.apply(
+        lambda row: create_mailto_link(row, subject=subject),
+        axis=1
+        )
+
+    period_meetings["Person 1 first name"] = period_meetings['Person 1'].apply(
+        lambda name: get_first_name(name)
+    )
+
+    period_meetings["Person 2 first name"] = period_meetings['Person 2'].apply(
+        lambda name: get_first_name(name)
+    )
+    
+    period_meetings["Person 1 assistant first name"] = period_meetings['Person 1 assistant'].apply(
+        lambda name: get_first_name(name)
+    )
+
+    period_meetings["Person 2 assistant first name"] = period_meetings['Person 2 assistant'].apply(
+        lambda name: get_first_name(name)
+    )
+
+    period_meetings["All emails"] = period_meetings.apply(
+        lambda row: "; ".join([
+            f"<{row['Person 1 email']}>",
+            f"<{row['Person 2 email']}>",
+            f"<{row['Person 1 assistant email']}>",
+            f"<{row['Person 2 assistant email']}>"
+        ]),
+        axis=1
+    )
+
+    # Dates
+    period_meetings["Start Date Long"] = format_date_with_suffix(dates.loc[period, "Start Date"])
+    period_meetings["End Date Long"] = format_date_with_suffix(dates.loc[period, "End Date"])
+
+    # Select the columns you want to keep constant
+    base_columns = ['Person 1', 'Person 2', "Person 1 first name", "Person 2 first name",
+                    'Person 1 assistant', 'Person 2 assistant', "Person 1 assistant first name", "Person 2 assistant first name",
+                    'Start Date', 'End Date', "Start Date Long", "End Date Long",
+                    "All emails", "Mailto Link"]
+
+    # Melt the dataframe to turn the four email columns into a single 'mailto' column
+    melted = pd.melt(
+        period_meetings,
+        id_vars=base_columns,
+        value_vars=[
+            'Person 1 email',
+            'Person 2 email',
+            'Person 1 assistant email',
+            'Person 2 assistant email'
+        ],
+        var_name='Email Type',
+        value_name='mailto'
+    )
+
+    if save:
+        melted.to_excel(save_path)
+    return melted
+    
+    
+
+def period_meeting_list(contacts, bool_schedule, period,
+                        save=False, folderpath=None):
     """
     Generate dataframe containing all pairs of people scheduled to meet in a given period.
     """
@@ -173,31 +346,17 @@ def period_meeting_list(contacts, bool_schedule, period, dates,
         save_path = os.path.join(parent_fullpath, save_name)
     else:
         save_path = os.path.join(folderpath, save_name)
-    
+
     idxs, jdxs = np.where(bool_schedule[:, :, period - 1] == 1)
     persons1 = contacts.index[idxs]
     persons2 = contacts.index[jdxs]
-    if full:
-        period_meetings = pd.DataFrame({'Person 1': persons1, 'Person 2': persons2,
-                                        'Person 1 email': contacts.loc[persons1, "email"].values,
-                                        'Person 2 email': contacts.loc[persons2, "email"].values,
-                                        'Person 1 assistant': contacts.loc[persons1, "Assistant"].values,
-                                        'Person 2 assistant': contacts.loc[persons2, "Assistant"].values,
-                                        'Person 1 assistant email': contacts.loc[persons1, "Assistant email"].values,
-                                        'Person 2 assistant email': contacts.loc[persons2, "Assistant email"].values,
-                                        'Assistant\'s emails': ["{}; {}".format(a1, a2) for a1, a2 in zip(contacts.loc[persons1, "Assistant email"].values, contacts.loc[persons2, "Assistant email"].values)],
-                                        'Start Date': dates.loc[period, "Start Date"],
-                                        'End Date': dates.loc[period, "End Date"]
-                                        })
-        if save:
-            period_meetings.to_excel(save_path)
-    else:
-        period_meetings = pd.DataFrame({'Person 1': persons1, 'Person 2': persons2})
+
+    period_meetings = pd.DataFrame({'Person 1': persons1, 'Person 2': persons2})
 
     return period_meetings
 
 
-def generate_meeting_schedule(contacts, bool_schedule, save=True,
+def generate_meeting_schedule(contacts, bool_schedule, dates, save=True,
                               folderpath=None, save_name='schedule.xlsx'):
     """
     Generate readable schedule from raw schedule numpy array.
@@ -224,7 +383,7 @@ def period_meeting_person(contacts, bool_schedule, period, persons, folderpath=N
     if isinstance(persons, str):
         persons = [persons]
     paired_persons = []
-    period_pairs = period_meeting_list(contacts, bool_schedule, period, full=False, folderpath=folderpath)
+    period_pairs = period_meeting_list(contacts, bool_schedule, period, folderpath=folderpath)
     for person in persons:
         mask = period_pairs == person
         if mask.sum().sum() == 0:
@@ -329,19 +488,19 @@ def run_schedule_optimisation(contacts, bool_schedule, n_periods, availability,
     #   multiple_meetings = strict:
     #       only 1 meeting allowed
     # =============================================================================
-    
+
     if multiple_meetings == "strict":
         # Each meeting between two persons can only happen at most once
         for i in range(n_people):
             for j in range(n_people):
                 constraints.append(cp.sum(X[i, j, :]) <= 1)
-        objective = cp.Maximize(cp.sum(X) )
-        
+        objective = cp.Maximize(cp.sum(X))
+
     elif multiple_meetings == 'penalty':
         pass
-    
+
     elif multiple_meetings == "penaltytime":
-    
+
         # =============================================================================
         #   Relaxation to allow multiple meetings
         # =============================================================================
@@ -350,7 +509,7 @@ def run_schedule_optimisation(contacts, bool_schedule, n_periods, availability,
             # introducing a penalty for multiple meetings
             # To model X[i,j,k] * X[i,j,l] which is not DCP-compliant when X is boolean, you can introduce a new auxiliary binary variable Z[i,j,k,l] and enforce constraints that approximate this product:
             Z = cp.Variable((n_people, n_people, total_periods, total_periods), boolean=True)
-        
+
             for i in range(n_people):
                 for j in range(i):
                     for k in range(total_periods):
@@ -361,25 +520,24 @@ def run_schedule_optimisation(contacts, bool_schedule, n_periods, availability,
                                 Z[i, j, k, l] <= X[i, j, l],
                                 Z[i, j, k, l] >= X[i, j, k] + X[i, j, l] - 1,
                             ]
-        
+
             penalty_terms = []
-        
+
             for i in range(n_people):
                 for j in range(i):
                     for k in range(total_periods):
                         for l in range(k + 1, total_periods):
                             penalty = penalty_weighting(abs(k - l), max_penalty=1, decay_rate=0.1)
                             penalty_terms.append(penalty * Z[i, j, k, l])
-        
-            ## obective from V0.2.0
+
+            # obective from V0.2.0
             # objective = cp.Maximize(cp.sum(X) - cp.sum(cp.hstack(penalty_terms)))
-            
-            ## new objective for V0.3.0 that penalises there being no meetings
+
+            # new objective for V0.3.0 that penalises there being no meetings
             objective = cp.Maximize(cp.sum(X) - cp.sum(cp.hstack(penalty_terms)) - total_periods * ((total_periods * n_people**2) - cp.sum(X)))
 
         else:
-            objective = cp.Maximize(cp.sum(X) )
-    
+            objective = cp.Maximize(cp.sum(X))
 
     # Solve the problem
     warnings.filterwarnings('ignore')
@@ -416,7 +574,7 @@ if __name__ == "__main__":
 
     bool_schedule = run_schedule_optimisation(contacts, bool_schedule, n_periods, availability)
 
-    meeting_schedule = generate_meeting_schedule(contacts, bool_schedule, save=True)
+    meeting_schedule = generate_meeting_schedule(contacts, bool_schedule, dates, save=True)
 
-    all_meetings_period = period_meeting_list(contacts, bool_schedule, 1, full=False, save=False)
+    all_meetings_period = period_meeting_list(contacts, bool_schedule, 1, save=False)
     all_meetings_period
