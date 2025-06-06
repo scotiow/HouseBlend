@@ -352,11 +352,14 @@ def period_meeting_list(contacts, bool_schedule, period,
     persons2 = contacts.index[jdxs]
 
     period_meetings = pd.DataFrame({'Person 1': persons1, 'Person 2': persons2})
+    
+    if save:
+        period_meetings.to_excel(save_path)
 
     return period_meetings
 
 
-def generate_meeting_schedule(contacts, bool_schedule, dates, save=True,
+def generate_meeting_schedule(contacts, bool_schedule, dates, save=False,
                               folderpath=None, save_name='schedule.xlsx'):
     """
     Generate readable schedule from raw schedule numpy array.
@@ -399,7 +402,7 @@ def penalty_weighting(difference, max_penalty, decay_rate=1):
     return max_penalty * np.exp(-decay_rate * difference)
 
 
-def participant_update(contacts, schedule, bool_schedule):
+def participant_update(contacts, schedule, bool_schedule, dates, folderpath):
     if isinstance(schedule, type(None)):
         print("No schedule provided. Skipping participant update")
         return contacts, schedule, bool_schedule
@@ -414,18 +417,24 @@ def participant_update(contacts, schedule, bool_schedule):
             ixs = schedule.index.get_indexer(for_removal.values)
             bool_schedule = np.delete(bool_schedule, ixs, axis=0)
             bool_schedule = np.delete(bool_schedule, ixs, axis=1)
-            schedule = generate_meeting_schedule(contacts, bool_schedule)
+            # schedule = generate_meeting_schedule(contacts, bool_schedule, dates, folderpath=folderpath)
             # schedule = schedule.drop(for_removal, axis=0)
             # schedule = schedule.drop(for_removal, axis=1)
 
         for_addition = contacts.index.difference(schedule.index)
         if for_addition.shape[0] > 0:
             print("Adding participants {}".format(for_addition.values))
-            new_rows = pd.DataFrame(np.nan, index=for_addition.values, columns=schedule.columns)
-            schedule = pd.concat([schedule, new_rows])
+            for participant in for_addition:
+                contacts_idx = contacts.index.get_indexer([participant])
+                bool_schedule = np.insert(bool_schedule, contacts_idx[0], 0, axis=0)
+                bool_schedule = np.insert(bool_schedule, contacts_idx[0], 0, axis=1)
+            # new_rows = pd.DataFrame(np.nan, index=for_addition.values, columns=schedule.columns)
+            # schedule = pd.concat([schedule, new_rows])
             # schedule[for_addition.values] = 0
-            pad_width = ((0, for_addition.shape[0]), (0, for_addition.shape[0]), (0, 0))
-            bool_schedule = np.pad(bool_schedule, pad_width=pad_width, mode='constant', constant_values=0)
+            # pad_width = ((0, for_addition.shape[0]), (0, for_addition.shape[0]), (0, 0))
+            # bool_schedule = np.pad(bool_schedule, pad_width=pad_width, mode='constant', constant_values=0)
+        schedule = generate_meeting_schedule(contacts, bool_schedule, dates, folderpath=folderpath)
+
         return contacts, schedule, bool_schedule
 
 
