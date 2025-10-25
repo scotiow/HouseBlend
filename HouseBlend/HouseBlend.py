@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Apr 30 18:13:16 2025.
+A coffee roulette app that pairs people up in an engineered serendipitous (pseudo-random) way
+where repeat meetings are discouraged.
 
 Copyright (c) 2025 Scot Wheeler
 
@@ -22,6 +23,9 @@ import datetime as dt
 import os
 from faker import Faker
 import warnings
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 def min_periods(n_people):
@@ -43,19 +47,67 @@ def min_periods(n_people):
     return min_periods
 
 
-def test_n_people(test):
+def test_n_people(n_people):
+    """ Generate the participant dataframe of n randomly named participants and associated assistants for testing purposes."""
+    # create empty list to hold names
     participant_names = []
+    
+    # use the Faker library and append names to list
     fake = Faker()
-    for _ in range(test):
+    for _ in range(n_people):
         participant_names.append(fake.first_name() + " " + fake.last_name())
-    contacts = pd.DataFrame({
+    
+    # create the contacts dataframe
+    participants_df = pd.DataFrame({
         "Person": participant_names,
         "email": ["{}@email.com".format(name.replace(" ", "")) for name in participant_names],
         "Assistant": participant_names,
         "Assistant email": ["{}@email.com".format(name.replace(" ", "")) for name in participant_names],
     }).set_index("Person")
 
-    return contacts
+    return participants_df
+
+
+def test_setup_data(folderpath, filename, n_participants=6, n_periods=None):
+    """
+    Create the set of test input data. Warning, this will overwrite existing participant input data.
+    """
+
+    if folderpath is None:
+        filepath = os.path.join(parent_fullpath, filename)
+    else:
+        filepath = os.path.join(folderpath, filename)
+
+    print("Deleting previous contacts file")
+    if os.path.exists(filepath):
+        os.remove(filepath)
+
+    # if you specify a test number, it creates a set of n random strings
+    print("Creating new contact directory of {} length for testing".format(n_participants))
+    contacts = test_n_people(n_participants)
+
+    # dates associated with periods
+    if isinstance(n_periods, type(None)):
+        n_periods = min_periods(n_participants)
+
+    start_date = (dt.datetime.today() + dt.timedelta(days=(7 - dt.datetime.today().weekday()))).date()
+    period_dates = pd.DataFrame({"Start Date": pd.date_range(start_date, periods=n_periods, freq='2W').values,
+                                 "End Date": pd.date_range(start_date + dt.timedelta(days=14), periods=n_periods, freq='2W').values},
+                                index=list(range(1, n_periods + 1)))
+    period_dates.index.name = "Period"
+
+    availability = pd.DataFrame({})
+
+    with pd.ExcelWriter(filepath) as writer:
+        contacts.to_excel(writer, sheet_name='Participants')
+        period_dates.to_excel(writer, sheet_name='Dates')
+        availability.to_excel(writer, sheet_name='Availability')
+
+    availability_all = pd.DataFrame(np.ones((contacts.shape[0], period_dates.shape[0])), index=contacts.index, columns=period_dates.index)
+    unavail_mask = availability == 0
+    availability_all.loc[unavail_mask.index, unavail_mask.columns] = availability_all.loc[unavail_mask.index, unavail_mask.columns].where(~unavail_mask, other=0)
+
+    return contacts, period_dates, availability_all
 
 
 def import_contacts_df(folderpath=None, filename='contacts.xlsx',
@@ -66,7 +118,7 @@ def import_contacts_df(folderpath=None, filename='contacts.xlsx',
     Create testing version if test set to True or int.
     """
     if test is not False:
-        return test_import_files(folderpath, filename, test, n_periods)
+        return test_setup_data(folderpath, filename, test, n_periods)
 
     if folderpath is None:
         filepath = os.path.join(parent_fullpath, filename)
@@ -74,7 +126,7 @@ def import_contacts_df(folderpath=None, filename='contacts.xlsx',
         filepath = os.path.join(folderpath, filename)
 
     if os.path.exists(filepath):
-        print("Importing contacts")
+        logger.info("Importing contacts")
 
         contacts = pd.read_excel(
             filepath,
@@ -108,98 +160,73 @@ def import_contacts_df(folderpath=None, filename='contacts.xlsx',
         return None
 
 
-def test_import_files(folderpath, filename, test, n_periods):
+# def import_raw_schedule(folderpath=None, filename='schedule_raw.npy'):
+#     """
+#     Import the raw schedule numpy array. Depreciated.
+#     """
+#     if folderpath is None:
+#         filepath = os.path.join(parent_fullpath, filename)
+#     else:
+#         filepath = os.path.join(folderpath, filename)
 
-    if folderpath is None:
-        filepath = os.path.join(parent_fullpath, filename)
-    else:
-        filepath = os.path.join(folderpath, filename)
-
-    print("Deleting previous contacts file")
-    if os.path.exists(filepath):
-        os.remove(filepath)
-
-    if test == True:
-        test = 5
-
-    # if you specify a test number, it creates a set of n random strings
-    print("Creating new contact directory of {} length for testing".format(test))
-    contacts = test_n_people(test)
-
-    # dates associated with periods
-    if isinstance(n_periods, type(None)):
-        n_periods = contacts.shape[0] - (contacts.shape[0] % 2 == 0)  # the number periods (e.g. weeks if meetings are weekly) in the season
-
-    start_date = (dt.datetime.today() + dt.timedelta(days=(7 - dt.datetime.today().weekday()))).date()
-    period_dates = pd.DataFrame({"Start Date": pd.date_range(start_date, periods=n_periods, freq='2W').values,
-                                 "End Date": pd.date_range(start_date + dt.timedelta(days=14), periods=n_periods, freq='2W').values},
-                                index=list(range(1, n_periods + 1)))
-    period_dates.index.name = "Period"
-
-    availability = pd.DataFrame({})
-
-    with pd.ExcelWriter(filepath) as writer:
-        contacts.to_excel(writer, sheet_name='Participants')
-        period_dates.to_excel(writer, sheet_name='Dates')
-        availability.to_excel(writer, sheet_name='Availability')
-
-    availability_all = pd.DataFrame(np.ones((contacts.shape[0], period_dates.shape[0])), index=contacts.index, columns=period_dates.index)
-    unavail_mask = availability == 0
-    availability_all.loc[unavail_mask.index, unavail_mask.columns] = availability_all.loc[unavail_mask.index, unavail_mask.columns].where(~unavail_mask, other=0)
-
-    return contacts, period_dates, availability_all
-
-
-def import_raw_schedule(folderpath=None, filename='schedule_raw.npy'):
-    """
-    Import the raw schedule numpy array
-    """
-    if folderpath is None:
-        filepath = os.path.join(parent_fullpath, filename)
-    else:
-        filepath = os.path.join(folderpath, filename)
-
-    if os.path.exists(filepath):
-        print("Importing raw historic schedule")
-        bool_schedule = np.load(filepath)
-    else:
-        print("No historic schedule found")
-        bool_schedule = None
-    return bool_schedule
+#     if os.path.exists(filepath):
+#         print("Importing raw historic schedule")
+#         bool_schedule = np.load(filepath)
+#     else:
+#         print("No historic schedule found")
+#         bool_schedule = None
+#     return bool_schedule
 
 
 def import_schedules(folderpath=None,
                      schedule_filename='schedule.xlsx',
-                     raw_schedule_filename='schedule_raw.npy',
+                    #  raw_schedule_filename='schedule_raw.npy',
                      test=False):
+    """
+    Import existing schedule file if it exists. 
+
+    If test=True, existing schedule file will be deleted.
+
+    Use of raw schedule file is depreciated.
+    """
     if folderpath is None:
         schedule_filepath = os.path.join(parent_fullpath, schedule_filename)
-        raw_schedule_filepath = os.path.join(parent_fullpath, raw_schedule_filename)
+        # raw_schedule_filepath = os.path.join(parent_fullpath, raw_schedule_filename)
     else:
         schedule_filepath = os.path.join(folderpath, schedule_filename)
-        raw_schedule_filepath = os.path.join(folderpath, raw_schedule_filename)
+        # raw_schedule_filepath = os.path.join(folderpath, raw_schedule_filename)
 
     if test != False:
-        print("Deleting previous schedule files")
+        logger.info("Deleting previous schedule files")
         if os.path.exists(schedule_filepath):
             os.remove(schedule_filepath)
-        if os.path.exists(raw_schedule_filepath):
-            os.remove(raw_schedule_filepath)
+        # if os.path.exists(raw_schedule_filepath):
+        #     os.remove(raw_schedule_filepath)
 
     if os.path.exists(schedule_filepath):
-        print("Existing schedule exists, importing schedule")
+        logger.info("Existing schedule exists, importing schedule")
         schedule = pd.read_excel(schedule_filepath, index_col=0)
         bool_schedule = generate_boolean_schedule(schedule)
     else:
-        print("No existing schedule found. Ensure current_period is set to 1.")
+        logger.info("No existing schedule found. Ensure current_period is set to 1.")
         schedule = None
         bool_schedule = None
     return schedule, bool_schedule
 
 
-def create_mailto_link(row, subject=None):
-    to = f"{row['Person 1 assistant email']};{row['Person 2 assistant email']}"
-    cc = f"{row['Person 1 email']};{row['Person 2 email']}"
+def create_mailto_link(meeting, subject=None):
+    """
+    Create a mailto link for a meeting. 
+    
+    Meeting is a series containing the fields:
+    - Person 1 email
+    - Person 2 email
+    - Person 1 assistant email
+    - Person 2 assistant email
+
+    """
+    to = f"{meeting['Person 1 assistant email']};{meeting['Person 2 assistant email']}"
+    cc = f"{meeting['Person 1 email']};{meeting['Person 2 email']}"
     link = f"mailto:{to}?cc={cc}"
     if subject:
         link += f"&subject={subject.replace(' ', '%20')}"
@@ -207,11 +234,13 @@ def create_mailto_link(row, subject=None):
 
 
 def get_first_name(name):
+    """ Extract the first name (the first word before the first space) """
     if isinstance(name, str) and name.strip():
         return name.strip().split()[0]
     return ""
 
 def format_date_with_suffix(date):
+    """ Format date string with format '28th May 2025' """
     # Ensure it's a datetime object
     if pd.isnull(date):
         return None
@@ -223,6 +252,144 @@ def format_date_with_suffix(date):
     else:
         suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
     return date.strftime(f"%A {day}{suffix} %B %Y")
+
+
+def export_for_mailmerge2(contacts, bool_schedule, period, dates,
+                          save=False, folderpath=None, save_prefix="HouseBlend", subject=None):
+    """
+    Export data for a particular period to create two separate mail merge dataframes.
+    
+    First dataframe: One row per person in each meeting (participants)
+    Second dataframe: One row per assistant in each meeting (assistants)
+    
+    Parameters
+    ----------
+    contacts : DataFrame
+        Contacts dataframe with person information
+    bool_schedule : ndarray
+        Boolean schedule array
+    period : int
+        Period number
+    dates : DataFrame
+        Dates dataframe
+    save : bool, optional
+        Whether to save to Excel files. Default is False.
+    folderpath : str, optional
+        Folder path to save files. Default is None.
+    save_prefix : str, optional
+        Prefix for save filenames. Default is "HouseBlend".
+    subject : str, optional
+        Subject for mailto links. Default is None.
+        
+    Returns
+    -------
+    tuple
+        (participants_df, assistants_df) - Two dataframes for mail merge
+    """
+    
+    # row and column index of each meeting for period. Indexes correspond to list participants.
+    idxs, jdxs = np.where(bool_schedule[:, :, period - 1] == 1)
+    persons1 = contacts.index[idxs]
+    persons2 = contacts.index[jdxs]
+    
+    # Create base meetings dataframe
+    meetings_base = pd.DataFrame({
+        'Person 1': persons1, 
+        'Person 2': persons2,
+        'Person 1 email': contacts.loc[persons1, "email"].values,
+        'Person 2 email': contacts.loc[persons2, "email"].values,
+        'Person 1 assistant': contacts.loc[persons1, "Assistant"].values,
+        'Person 2 assistant': contacts.loc[persons2, "Assistant"].values,
+        'Person 1 assistant email': contacts.loc[persons1, "Assistant email"].values,
+        'Person 2 assistant email': contacts.loc[persons2, "Assistant email"].values,
+        'Start Date': dates.loc[period, "Start Date"].strftime('%d/%m/%Y'),
+        'End Date': dates.loc[period, "End Date"].strftime('%d/%m/%Y'),
+        'Start Date Long': format_date_with_suffix(dates.loc[period, "Start Date"]),
+        'End Date Long': format_date_with_suffix(dates.loc[period, "End Date"])
+    })
+    
+    # First dataframe: Participants mail merge
+    participants_rows = []
+    for _, meeting in meetings_base.iterrows():
+        # Row for Person 1
+        participants_rows.append({
+            'mailto full name': meeting['Person 1'],
+            'mailto first name': get_first_name(meeting['Person 1']),
+            'mailto assistant full name': meeting['Person 1 assistant'],
+            'paired with full name': meeting['Person 2'],
+            'paired with first name': get_first_name(meeting['Person 2']),
+            'start date': meeting['Start Date'],
+            'end date': meeting['End Date'],
+            'start date long': meeting['Start Date Long'],
+            'end date long': meeting['End Date Long'],
+            'mailto email': meeting['Person 1 email']
+        })
+        
+        # Row for Person 2
+        participants_rows.append({
+            'mailto full name': meeting['Person 2'],
+            'mailto first name': get_first_name(meeting['Person 2']),
+            'mailto assistant full name': meeting['Person 2 assistant'],
+            'paired with full name': meeting['Person 1'],
+            'paired with first name': get_first_name(meeting['Person 1']),
+            'start date': meeting['Start Date'],
+            'end date': meeting['End Date'],
+            'start date long': meeting['Start Date Long'],
+            'end date long': meeting['End Date Long'],
+            'mailto email': meeting['Person 2 email']
+        })
+    
+    participants_df = pd.DataFrame(participants_rows)
+    
+    # Second dataframe: Assistants mail merge
+    assistants_rows = []
+    for _, meeting in meetings_base.iterrows():
+        # Row for Person 1's assistant
+        assistants_rows.append({
+            'mailto assistant full name': meeting['Person 1 assistant'],
+            'mailto assistant first name': get_first_name(meeting['Person 1 assistant']),
+            'person full name': meeting['Person 1'],
+            'paired with full name': meeting['Person 2'],
+            'paired with assistant full name': meeting['Person 2 assistant'],
+            'paired with assistant email': meeting['Person 2 assistant email'],
+            'start date': meeting['Start Date'],
+            'end date': meeting['End Date'],
+            'start date long': meeting['Start Date Long'],
+            'end date long': meeting['End Date Long'],
+            'mailto email': meeting['Person 1 assistant email']
+        })
+        
+        # Row for Person 2's assistant
+        assistants_rows.append({
+            'mailto assistant full name': meeting['Person 2 assistant'],
+            'mailto assistant first name': get_first_name(meeting['Person 2 assistant']),
+            'person full name': meeting['Person 2'],
+            'paired with full name': meeting['Person 1'],
+            'paired with assistant full name': meeting['Person 1 assistant'],
+            'paired with assistant email': meeting['Person 1 assistant email'],
+            'start date': meeting['Start Date'],
+            'end date': meeting['End Date'],
+            'start date long': meeting['Start Date Long'],
+            'end date long': meeting['End Date Long'],
+            'mailto email': meeting['Person 2 assistant email']
+        })
+    
+    assistants_df = pd.DataFrame(assistants_rows)
+    
+    # Save to Excel files if requested
+    if save:
+        save_name = f'{save_prefix}_period_{period}_mailmerge.xlsx'
+        
+        if folderpath is None:
+            save_path = os.path.join(parent_fullpath, save_name)
+        else:
+            save_path = os.path.join(folderpath, save_name)
+        
+        with pd.ExcelWriter(save_path) as writer:
+            participants_df.to_excel(writer, sheet_name='Participants', index=False)
+            assistants_df.to_excel(writer, sheet_name='Assistants', index=False)
+    
+    return participants_df, assistants_df
 
 
 def export_for_mailmerge(contacts, bool_schedule, period, dates,
@@ -260,10 +427,12 @@ def export_for_mailmerge(contacts, bool_schedule, period, dates,
     else:
         save_path = os.path.join(folderpath, save_name)
 
+    # row and column index of each meeting for period. Indexes correspond to list participants.
     idxs, jdxs = np.where(bool_schedule[:, :, period - 1] == 1)
     persons1 = contacts.index[idxs]
     persons2 = contacts.index[jdxs]
 
+    # core meetings dataframe
     period_meetings = pd.DataFrame({'Person 1': persons1, 'Person 2': persons2,
                                     'Person 1 email': contacts.loc[persons1, "email"].values,
                                     'Person 2 email': contacts.loc[persons2, "email"].values,
@@ -275,27 +444,28 @@ def export_for_mailmerge(contacts, bool_schedule, period, dates,
                                     'Start Date': dates.loc[period, "Start Date"].strftime('%d/%m/%Y'),
                                     'End Date': dates.loc[period, "End Date"].strftime('%d/%m/%Y')
                                     })
+    
+    # mailto link
     period_meetings["Mailto Link"] = period_meetings.apply(
         lambda row: create_mailto_link(row, subject=subject),
         axis=1
         )
 
+    # create columns containing only first names
     period_meetings["Person 1 first name"] = period_meetings['Person 1'].apply(
         lambda name: get_first_name(name)
     )
-
     period_meetings["Person 2 first name"] = period_meetings['Person 2'].apply(
         lambda name: get_first_name(name)
     )
-    
     period_meetings["Person 1 assistant first name"] = period_meetings['Person 1 assistant'].apply(
         lambda name: get_first_name(name)
     )
-
     period_meetings["Person 2 assistant first name"] = period_meetings['Person 2 assistant'].apply(
         lambda name: get_first_name(name)
     )
 
+    # create column containing all the emails of everyone involved in a meeting
     period_meetings["All emails"] = period_meetings.apply(
         lambda row: "; ".join([
             f"<{row['Person 1 email']}>",
@@ -306,10 +476,12 @@ def export_for_mailmerge(contacts, bool_schedule, period, dates,
         axis=1
     )
 
-    # Dates
+    # Readable dates
     period_meetings["Start Date Long"] = format_date_with_suffix(dates.loc[period, "Start Date"])
     period_meetings["End Date Long"] = format_date_with_suffix(dates.loc[period, "End Date"])
 
+    ## expand dataframe so there is a row for every person involved in a meeting (i.e. 4 rows for every meeting)
+    ## this allows you to address each person individually which is a limitataion of office mailmerge.
     # Select the columns you want to keep constant
     base_columns = ['Person 1', 'Person 2', "Person 1 first name", "Person 2 first name",
                     'Person 1 assistant', 'Person 2 assistant', "Person 1 assistant first name", "Person 2 assistant first name",
