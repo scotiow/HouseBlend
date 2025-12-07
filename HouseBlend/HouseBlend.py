@@ -682,10 +682,68 @@ def run_schedule_optimisation(contacts, dates, availability, schedule, bool_sche
                               current_period=1, verbose=False,
                               multiple_meetings='strict', save=False, folderpath=None,
                               parliament_name="example"):
+    """
+    Run the schedule optimisation using cvxpy.
+
+    The method overview is:
+    1) Define the decision variable X, a 3D boolean array where X[i,j,k] = 1 if person i meets person j in period k.
+    2) Define constraints to ensure that:
+        - No one meets themselves.
+        - Each person meets at most one other person per period.
+        - Participants are only scheduled in periods they are available.
+        - Historical meetings (if any) are preserved.
+    3) Define the objective function to maximise the total number of meetings while penalising repeat meetings based on the chosen strategy.
+    4) Solve the optimisation problem using a suitable solver.
+    5) Extract the optimal schedule from the decision variable.
+
+    Todo:
+    - decide if default is n_to_schedule = all remaining periods in season or 1 period
+    - reduce size of decision variable by only including remaining periods to schedule, to do this can calculate a penalty matrix beforehand that accounts for historic meetings,\
+          then multiply this by X in the objective function.
+
+
+
+
+    Parameters
+    ----------
+    contacts : DataFrame
+        Contacts dataframe with participant information.
+    dates : DataFrame
+        Dates dataframe with period dates.
+    availability : DataFrame
+        Availability dataframe indicating participant availability per period.
+    schedule : DataFrame
+        Schedule dataframe with current meeting schedule.
+    bool_schedule : ndarray
+        Boolean schedule array indicating current meeting schedule.
+    n_to_schedule : int
+        Number of periods to schedule.
+    current_period : int, optional
+        Current period number. The default is 1.
+    verbose : bool, optional
+        Whether to print solver output. The default is False.
+    multiple_meetings : str, optional
+        Strategy for handling multiple meetings. Options are 'strict', 'penalty', 'penaltytime'. The default is 'strict'.
+    save : bool, optional
+        Whether to save the updated schedule. The default is False.
+    folderpath : str, optional
+        Folder path to save the schedule. The default is None.
+    parliament_name : str, optional
+        Name of the parliament. The default is "example".
+
+    Returns
+    -------
+    bool_schedule : ndarray
+        Updated boolean schedule array.
+    """
     # determine shape of schedule variable
     n_people = contacts.shape[0]
+    
+    # determine the number of periods ahead to schedule
+    # if n_to_schedule is None, set to minimum required periods for everyone to meet everyone else
     if isinstance(n_to_schedule, type(None)):
-        n_to_schedule = n_people - (n_people % 2 == 0)  # the number periods (e.g. weeks if meetings are weekly) in the season
+        n_to_schedule = min_periods(n_people=n_people)  # the number periods (e.g. weeks if meetings are weekly) in the season
+    # total periods is the number to schedule plus those already fixed
     total_periods = n_to_schedule + (current_period - 1)
 
     # Define variable
@@ -698,7 +756,7 @@ def run_schedule_optimisation(contacts, dates, availability, schedule, bool_sche
     upper_mask = np.triu(np.ones((n_people, n_people)), k=0)
 
     for k in range(total_periods):
-        # upper triangle mask will always be 0
+        # upper triangle will always be 0
         constraints.append(cp.multiply(upper_mask, X[:, :, k]) == 0)
 
         # each person can only meet once per week, each person is represented by a row and column
