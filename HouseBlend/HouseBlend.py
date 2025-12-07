@@ -805,12 +805,12 @@ def run_schedule_optimisation(contacts, dates, availability, schedule, bool_sche
             for i in range(n_people):
                 for j in range(i):
                     for k in range(total_periods):
-                        for l in range(k + 1, total_periods):
+                        for L in range(k + 1, total_periods):
                             # Enforce Z[i,j,k,l] = X[i,j,k] AND X[i,j,l]
                             constraints += [
-                                Z[i, j, k, l] <= X[i, j, k],
-                                Z[i, j, k, l] <= X[i, j, l],
-                                Z[i, j, k, l] >= X[i, j, k] + X[i, j, l] - 1,
+                                Z[i, j, k, L] <= X[i, j, k],
+                                Z[i, j, k, L] <= X[i, j, L],
+                                Z[i, j, k, L] >= X[i, j, k] + X[i, j, L] - 1,
                             ]
 
             penalty_terms = []
@@ -818,9 +818,9 @@ def run_schedule_optimisation(contacts, dates, availability, schedule, bool_sche
             for i in range(n_people):
                 for j in range(i):
                     for k in range(total_periods):
-                        for l in range(k + 1, total_periods):
-                            penalty = penalty_weighting(abs(k - l), max_penalty=1, decay_rate=0.1)
-                            penalty_terms.append(penalty * Z[i, j, k, l])
+                        for L in range(k + 1, total_periods):
+                            penalty = penalty_weighting(abs(k - L), max_penalty=1, decay_rate=0.1)
+                            penalty_terms.append(penalty * Z[i, j, k, L])
 
             # obective from V0.2.0
             # objective = cp.Maximize(cp.sum(X) - cp.sum(cp.hstack(penalty_terms)))
