@@ -232,6 +232,8 @@ def import_hansard(folderpath=None, filename=None, parliament_name="example",
             index_col=0,
             sheet_name="Availability"
         )
+        # fill any nans in availability with 1s, assuming that blank cells mean available
+        availability = availability.fillna(1)
 
         # availability_all = generate_availability_all(availability, contacts, dates)
 
@@ -565,7 +567,7 @@ def period_meeting_list(contacts, bool_schedule, period,
     return period_meetings
 
 
-def generate_meeting_schedule(contacts, bool_schedule, dates, save=False,
+def generate_meeting_schedule(contacts, dates, availability, bool_schedule, save=False,
                               folderpath=None, parliament_name="example", filename=None):
     """
     Generate readable schedule from raw schedule numpy array.
@@ -577,19 +579,23 @@ def generate_meeting_schedule(contacts, bool_schedule, dates, save=False,
         paired_person = period_meeting_person(contacts, bool_schedule, k + 1, contacts.index.values)
         schedule.loc[:, "Period {}".format(k + 1)] = paired_person
     if save:
-        if folderpath is None:
-            folderpath = parliament_name
+        # use the save hansard function
+        save_hansard(contacts, dates, availability, schedule,
+                     folderpath=folderpath, filename=filename)
 
-        # set filename
-        if filename is None:
-            filename = '{}_hansard.xlsx'.format(parliament_name)
-        # add xlsx if not already present
-        if not filename.endswith('.xlsx'):
-            filename += '.xlsx'
+    #     if folderpath is None:
+    #         folderpath = parliament_name
 
-        filepath = os.path.join(folderpath, filename)
-        with pd.ExcelWriter(filepath, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-            schedule.to_excel(writer, sheet_name='Schedule')
+    #     # set filename
+    #     if filename is None:
+    #         filename = '{}_hansard.xlsx'.format(parliament_name)
+    #     # add xlsx if not already present
+    #     if not filename.endswith('.xlsx'):
+    #         filename += '.xlsx'
+
+    #     filepath = os.path.join(folderpath, filename)
+    #     with pd.ExcelWriter(filepath, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+    #         schedule.to_excel(writer, sheet_name='Schedule')
     return schedule
 
 
@@ -616,7 +622,7 @@ def penalty_weighting(difference, max_penalty, decay_rate=1):
     return max_penalty * np.exp(-decay_rate * difference)
 
 
-def participant_update(contacts, dates, availability, schedule, bool_schedule, parliament_name, folderpath=None):
+def participant_update(contacts, dates, availability, schedule, bool_schedule, parliament_name, folderpath=None, filename=None):
     """
     Handle any updates to the participant list within the participant sheet of the hansard.
 
@@ -648,12 +654,13 @@ def participant_update(contacts, dates, availability, schedule, bool_schedule, p
                 bool_schedule = np.insert(bool_schedule, contacts_idx[0], 0, axis=0)
                 bool_schedule = np.insert(bool_schedule, contacts_idx[0], 0, axis=1)
 
-        # regenerate schedule dataframe
-        schedule = generate_meeting_schedule(contacts, bool_schedule, dates, parliament_name=parliament_name, folderpath=folderpath)
-
         # update availability from comparison with contacts
         # remove rows from availability that are no longer in contacts
         availability = availability.loc[availability.index.intersection(contacts.index), :]
+
+        # regenerate schedule dataframe
+        schedule = generate_meeting_schedule(contacts, dates, availability, bool_schedule, parliament_name=parliament_name, folderpath=folderpath, filename=filename)
+        
         # add rows to availability for new contacts, defaulting to available for all periods
         for participant in for_addition:
             contacts_idx = contacts.index.get_indexer([participant])
@@ -681,7 +688,7 @@ def generate_boolean_schedule(schedule):
 def run_schedule_optimisation(contacts, dates, availability, schedule, bool_schedule, n_to_schedule,
                               current_period=1, verbose=False,
                               multiple_meetings='strict', save=False, folderpath=None,
-                              parliament_name="example"):
+                              parliament_name="example", filename=None):
     """
     Run the schedule optimisation using cvxpy.
 
@@ -730,6 +737,8 @@ def run_schedule_optimisation(contacts, dates, availability, schedule, bool_sche
         Folder path to save the schedule. The default is None.
     parliament_name : str, optional
         Name of the parliament. The default is "example".
+    filename : str, optional
+        Filename to save the schedule. The default is None.
 
     Returns
     -------
@@ -841,13 +850,13 @@ def run_schedule_optimisation(contacts, dates, availability, schedule, bool_sche
 
     if save:
         # regenerate schedule dataframe
-        schedule = generate_meeting_schedule(contacts, bool_schedule, dates, parliament_name=parliament_name, folderpath=folderpath)
+        schedule = generate_meeting_schedule(contacts, dates, availability, bool_schedule, parliament_name=parliament_name, folderpath=folderpath, filename=filename)
 
         # save updated hansard
         save_hansard(contacts, dates, availability, schedule,
                      parliament_name=parliament_name,
                      folderpath=folderpath,
-                     filename='{}_hansard.xlsx'.format(parliament_name))
+                     filename=filename)
 
     return bool_schedule
 
@@ -871,7 +880,7 @@ if __name__ == "__main__":
     bool_schedule = run_schedule_optimisation(contacts, dates, availability, schedule, bool_schedule,
                                                1, save=True)
 
-    # meeting_schedule = generate_meeting_schedule(contacts, bool_schedule, dates, save=True)
+    # meeting_schedule = generate_meeting_schedule(contacts, dates, availability, bool_schedule, save=True)
 
     # all_meetings_period = period_meeting_list(contacts, bool_schedule, 1, save=False)
     # all_meetings_period
