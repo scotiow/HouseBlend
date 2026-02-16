@@ -581,7 +581,7 @@ def generate_meeting_schedule(contacts, dates, availability, bool_schedule, save
     if save:
         # use the save hansard function
         save_hansard(contacts, dates, availability, schedule,
-                     folderpath=folderpath, filename=filename)
+                     parliament_name=parliament_name, folderpath=folderpath, filename=filename)
 
     #     if folderpath is None:
     #         folderpath = parliament_name
