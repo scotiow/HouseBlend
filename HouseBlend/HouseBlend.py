@@ -668,6 +668,47 @@ def participant_update(contacts, dates, availability, schedule, bool_schedule, p
 
         return contacts, dates, availability, schedule, bool_schedule
 
+def check_dates_and_add(current_period, n_to_schedule, dates, availability, schedule, bool_schedule, parliament_name, folderpath=None, filename=None):
+    """
+    Check the dates sheet to ensure there are enough future datess for the number of periods we want to schedule.
+    If not, add more dates based on the mode frequency (e.g. weekly, biweekly) of the existing dates.
+    """
+    # determine frequency of existing dates
+    if dates.shape[0] > 1:
+        freq = pd.infer_freq(dates["Start Date"])
+        if freq is None:
+            print("Could not infer frequency from existing dates. Defaulting to biweekly.")
+            freq = '2W'
+    else:
+        print("Not enough existing dates to infer frequency. Defaulting to biweekly.")
+        freq = '2W'
+    
+    for i in range(current_period, current_period + n_to_schedule):
+        if i not in dates.index:
+            print(f"Adding dates for period {i} as it is missing from the dates sheet.")
+            # determine frequency of existing dates
+            last_start_date = dates["Start Date"].max()
+            last_end_date = dates["End Date"].max()
+            new_start_date = last_start_date + pd.tseries.frequencies.to_offset(freq)
+            new_end_date = last_end_date + pd.tseries.frequencies.to_offset(freq)
+            new_dates = pd.DataFrame({"Start Date": [new_start_date], "End Date": [new_end_date]}, index=[i])
+            dates = pd.concat([dates, new_dates])
+    
+    # add column names to availability and schedule if needed
+    for i in range(current_period, current_period + n_to_schedule):
+        if f"Period {i}" not in availability.columns:
+            availability[f"Period {i}"] = 1  # default to available
+        if f"Period {i}" not in schedule.columns:
+            schedule[f"Period {i}"] = ""
+    
+    # add layers to bool_schedule if needed
+    if bool_schedule.shape[2] < current_period + n_to_schedule - 1:
+        additional_layers = current_period + n_to_schedule - 1 - bool_schedule.shape[2]
+        bool_schedule = np.concatenate([bool_schedule, np.zeros((bool_schedule.shape[0], bool_schedule.shape[1], additional_layers))], axis=2)
+
+    # return updated dates, schedule, and bool_schedule
+    return dates, availability, schedule, bool_schedule
+
 
 def generate_boolean_schedule(schedule):
     """
@@ -684,6 +725,130 @@ def generate_boolean_schedule(schedule):
         bool_schedule[:, :, k] = bool_schedule[:, :, k] * lower_mask
     return bool_schedule
 
+def run_schedule_optimisation2(contacts, dates, availability, schedule, bool_schedule, n_to_schedule,
+                               current_period=1, verbose=False,
+                               multiple_meetings='strict', save=False, folderpath=None,
+                               parliament_name="example", filename=None):
+    """
+    Updated version of run schedule optimisation.
+    """
+
+    # note, current period is 1 indexed, but bool_schedule is 0 indexed, so need to subtract 1 when indexing bool_schedule
+    
+    # the number of people
+    n_people = contacts.shape[0]
+
+    # determine the number of periods ahead to schedule
+    # if n_to_schedule is None, set to minimum required periods for everyone to meet everyone else
+    if isinstance(n_to_schedule, type(None)):
+        n_to_schedule = min_periods(n_people=n_people)  # the number periods (e.g. weeks if meetings are weekly) in the season
+
+    # check dates and add if needed
+    dates, availability, schedule, bool_schedule = check_dates_and_add(current_period, n_to_schedule, dates, availability, schedule, bool_schedule, parliament_name, folderpath=folderpath, filename=filename)
+
+    # Define variable
+    X = cp.Variable((n_people, n_people, n_to_schedule), boolean=True)
+
+    # define constraints
+    constraints = []
+
+    # Get upper triangle mask (including diagonal)
+    upper_mask = np.triu(np.ones((n_people, n_people)), k=0)
+
+    for k in range(n_to_schedule):
+        # upper triangle will always be 0
+        constraints.append(cp.multiply(upper_mask, X[:, :, k]) == 0)
+
+        # each person can only meet once per week, each person is represented by a row and column
+        for i in range(n_people):
+            constraints.append(cp.sum(X[i, :, k]) + cp.sum(X[:, i, k]) <= 1)
+
+    # set unavailability
+    # do this by setting the sum of the corresponding row and column to 0?
+    for k, m in zip(range(n_to_schedule), range(current_period - 1, current_period - 1 + n_to_schedule)):
+        period_unavail_idxs = availability.index.get_indexer(availability[availability[f'Period {m + 1}'] == 0].index)
+        constraints.append(cp.sum(X[period_unavail_idxs, :, k]) == 0)
+        constraints.append(cp.sum(X[:, period_unavail_idxs, k]) == 0)
+
+    # backwards looking penalising repeat meetings
+    # for each i, j pair, calculate the time since they last met
+    weighting = np.zeros((n_people, n_people))
+    for i in range(n_people):
+        for j in range(i):
+            if i != j:
+                # Find the most recent period where i and j met
+                last_meeting_period = 0
+                for k in range(current_period - 1, -1, -1):
+                    if (bool_schedule[i, j, k] == 1) or (bool_schedule[j, i, k] == 1): # check both i,j and j,i in case of any issues with upper triangle
+                        last_meeting_period = max(last_meeting_period, k + 1)
+            weighting[i, j] = 1/penalty_weighting(abs(current_period - last_meeting_period), max_penalty=1, decay_rate=0.1) 
+    print(pd.DataFrame(weighting, index=contacts.index, columns=contacts.index))
+    # forward looking penalising repeat meetings
+    # only relevant if n_periods > 1
+    if n_to_schedule > 1:
+        # introducing a penalty for multiple meetings
+        # To model X[i,j,k] * X[i,j,l] which is not DCP-compliant when X is boolean, you can introduce a new auxiliary binary variable Z[i,j,k,l] and enforce constraints that approximate this product:
+        Z = cp.Variable((n_people, n_people, n_to_schedule, n_to_schedule), boolean=True)
+
+        for i in range(n_people):
+            for j in range(i):
+                for k in range(n_to_schedule):
+                    for L in range(k + 1, n_to_schedule):
+                        # Enforce Z[i,j,k,l] = X[i,j,k] AND X[i,j,l]
+                        # linear constraints to approximate the AND operation
+                        constraints += [
+                            Z[i, j, k, L] <= X[i, j, k], 
+                            Z[i, j, k, L] <= X[i, j, L],
+                            Z[i, j, k, L] >= X[i, j, k] + X[i, j, L] - 1,
+                        ]
+
+        penalty_terms = []
+
+        for i in range(n_people):
+            for j in range(i):
+                for k in range(n_to_schedule):
+                    for L in range(k + 1, n_to_schedule):
+                        penalty = penalty_weighting(abs(k - L), max_penalty=1, decay_rate=0.1)
+                        penalty_terms.append(penalty * Z[i, j, k, L])
+
+        # ensure weighting same shape as X[:,:, :n_to_schedule] by duplicating rows and columns as needed
+        weighting_expanded = np.zeros((n_people, n_people, n_to_schedule))
+        for k in range(n_to_schedule):
+            weighting_expanded[:, :, k] = weighting
+        # objective function to include both past meetings penalty and future meetings penalty
+        objective = cp.Maximize(cp.sum(cp.multiply(weighting_expanded, X[:, :, :])) - cp.sum(penalty_terms))
+
+    else:
+        weighting_expanded = np.zeros((n_people, n_people, n_to_schedule))
+        for k in range(n_to_schedule):
+            weighting_expanded[:, :, k] = weighting
+        #  objective function to include past meetings penalty only
+        print("Single period, only including past meeting penalty")
+        objective = cp.Maximize(cp.sum(cp.multiply(weighting_expanded, X[:, :, :])))
+
+    # Solve the problem
+    # warnings.filterwarnings('ignore')
+
+    problem = cp.Problem(objective, constraints)
+    problem.solve(verbose=verbose)
+    # to add a time limit, need to use solver specific options, therefore, need to be explicit as to what solver to use. 
+
+    new_schedule = (X.value >= 0.5).astype(int)
+    bool_schedule[:, :, current_period - 1:current_period - 1 + n_to_schedule] = new_schedule
+
+    if save:
+        # regenerate schedule dataframe
+        schedule = generate_meeting_schedule(contacts, dates, availability, bool_schedule, parliament_name=parliament_name, folderpath=folderpath, filename=filename)
+
+        # save updated hansard
+        save_hansard(contacts, dates, availability, schedule,
+                     parliament_name=parliament_name,
+                     folderpath=folderpath,
+                     filename=filename)
+
+    return bool_schedule
+
+    
 
 def run_schedule_optimisation(contacts, dates, availability, schedule, bool_schedule, n_to_schedule,
                               current_period=1, verbose=False,
@@ -799,7 +964,7 @@ def run_schedule_optimisation(contacts, dates, availability, schedule, bool_sche
 
     elif multiple_meetings == 'penalty':
         pass
-
+    
     elif multiple_meetings == "penaltytime":
 
         # =============================================================================
@@ -816,8 +981,9 @@ def run_schedule_optimisation(contacts, dates, availability, schedule, bool_sche
                     for k in range(total_periods):
                         for L in range(k + 1, total_periods):
                             # Enforce Z[i,j,k,l] = X[i,j,k] AND X[i,j,l]
+                            # linear constraints to approximate the AND operation
                             constraints += [
-                                Z[i, j, k, L] <= X[i, j, k],
+                                Z[i, j, k, L] <= X[i, j, k], 
                                 Z[i, j, k, L] <= X[i, j, L],
                                 Z[i, j, k, L] >= X[i, j, k] + X[i, j, L] - 1,
                             ]
@@ -845,6 +1011,7 @@ def run_schedule_optimisation(contacts, dates, availability, schedule, bool_sche
 
     problem = cp.Problem(objective, constraints)
     problem.solve(verbose=verbose)
+    # to add a time limit, need to use solver specific options, therefore, need to be explicit as to what solver to use. 
 
     bool_schedule = (X.value >= 0.5).astype(int)
 
