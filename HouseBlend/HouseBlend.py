@@ -22,7 +22,7 @@ https://opensource.org/licenses/MIT
 
 __author__ = "Scot Wheeler"
 __license__ = "MIT"
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 import numpy as np
 import cvxpy as cp
@@ -728,7 +728,7 @@ def generate_boolean_schedule(schedule):
 def run_schedule_optimisation2(contacts, dates, availability, schedule, bool_schedule, n_to_schedule,
                                current_period=1, verbose=False,
                                multiple_meetings='strict', save=False, folderpath=None,
-                               parliament_name="example", filename=None):
+                               parliament_name="example", filename=None, iterative_limit=3):
     """
     Updated version of run schedule optimisation.
     """
@@ -746,95 +746,108 @@ def run_schedule_optimisation2(contacts, dates, availability, schedule, bool_sch
     # check dates and add if needed
     dates, availability, schedule, bool_schedule = check_dates_and_add(current_period, n_to_schedule, dates, availability, schedule, bool_schedule, parliament_name, folderpath=folderpath, filename=filename)
 
-    # Define variable
-    X = cp.Variable((n_people, n_people, n_to_schedule), boolean=True)
+    # run optimisation iteratively if n_to_schedule > iterative_limit, to avoid solver struggling with large number of boolean variables. This is a heuristic and may not always give the optimal solution, but should be more efficient.
+    counter = 0
+    if n_to_schedule > iterative_limit:
+        print(f"Number of periods to schedule ({n_to_schedule}) is greater than iterative limit ({iterative_limit}). Running optimisation iteratively in chunks of {iterative_limit} periods.")
+    
+    while counter < (n_to_schedule // iterative_limit) + 1:
+        n_it = min(iterative_limit, n_to_schedule - counter * iterative_limit)
+        # proxy current period for iteration
+        start_period = current_period + counter * iterative_limit
+        
+        print(f"Running optimisation for periods {start_period} to {start_period + n_it - 1}")
 
-    # define constraints
-    constraints = []
+        # Define variable
+        X = cp.Variable((n_people, n_people, n_it), boolean=True)
 
-    # Get upper triangle mask (including diagonal)
-    upper_mask = np.triu(np.ones((n_people, n_people)), k=0)
+        # define constraints
+        constraints = []
 
-    for k in range(n_to_schedule):
-        # upper triangle will always be 0
-        constraints.append(cp.multiply(upper_mask, X[:, :, k]) == 0)
+        # Get upper triangle mask (including diagonal)
+        upper_mask = np.triu(np.ones((n_people, n_people)), k=0)
 
-        # each person can only meet once per week, each person is represented by a row and column
-        for i in range(n_people):
-            constraints.append(cp.sum(X[i, :, k]) + cp.sum(X[:, i, k]) <= 1)
+        for k in range(n_it):
+            # upper triangle will always be 0
+            constraints.append(cp.multiply(upper_mask, X[:, :, k]) == 0)
 
-    # set unavailability
-    # do this by setting the sum of the corresponding row and column to 0?
-    for k, m in zip(range(n_to_schedule), range(current_period - 1, current_period - 1 + n_to_schedule)):
-        period_unavail_idxs = availability.index.get_indexer(availability[availability[f'Period {m + 1}'] == 0].index)
-        constraints.append(cp.sum(X[period_unavail_idxs, :, k]) == 0)
-        constraints.append(cp.sum(X[:, period_unavail_idxs, k]) == 0)
+            # each person can only meet once per week, each person is represented by a row and column
+            for i in range(n_people):
+                constraints.append(cp.sum(X[i, :, k]) + cp.sum(X[:, i, k]) <= 1)
 
-    # backwards looking penalising repeat meetings
-    # for each i, j pair, calculate the time since they last met
-    weighting = np.zeros((n_people, n_people))
-    for i in range(n_people):
-        for j in range(i):
-            if i != j:
-                # Find the most recent period where i and j met
-                last_meeting_period = 0
-                for k in range(current_period - 1, -1, -1):
-                    if (bool_schedule[i, j, k] == 1) or (bool_schedule[j, i, k] == 1): # check both i,j and j,i in case of any issues with upper triangle
-                        last_meeting_period = max(last_meeting_period, k + 1)
-            weighting[i, j] = 1/penalty_weighting(abs(current_period - last_meeting_period), max_penalty=1, decay_rate=0.1) 
-    print(pd.DataFrame(weighting, index=contacts.index, columns=contacts.index))
-    # forward looking penalising repeat meetings
-    # only relevant if n_periods > 1
-    if n_to_schedule > 1:
-        # introducing a penalty for multiple meetings
-        # To model X[i,j,k] * X[i,j,l] which is not DCP-compliant when X is boolean, you can introduce a new auxiliary binary variable Z[i,j,k,l] and enforce constraints that approximate this product:
-        Z = cp.Variable((n_people, n_people, n_to_schedule, n_to_schedule), boolean=True)
+        # set unavailability
+        # do this by setting the sum of the corresponding row and column to 0?
+        for k, m in zip(range(n_it), range(start_period - 1, start_period - 1 + n_it)):
+            period_unavail_idxs = availability.index.get_indexer(availability[availability[f'Period {m + 1}'] == 0].index)
+            constraints.append(cp.sum(X[period_unavail_idxs, :, k]) == 0)
+            constraints.append(cp.sum(X[:, period_unavail_idxs, k]) == 0)
 
+        # backwards looking penalising repeat meetings
+        # for each i, j pair, calculate the time since they last met
+        weighting = np.zeros((n_people, n_people))
         for i in range(n_people):
             for j in range(i):
-                for k in range(n_to_schedule):
-                    for L in range(k + 1, n_to_schedule):
-                        # Enforce Z[i,j,k,l] = X[i,j,k] AND X[i,j,l]
-                        # linear constraints to approximate the AND operation
-                        constraints += [
-                            Z[i, j, k, L] <= X[i, j, k], 
-                            Z[i, j, k, L] <= X[i, j, L],
-                            Z[i, j, k, L] >= X[i, j, k] + X[i, j, L] - 1,
-                        ]
+                if i != j:
+                    # Find the most recent period where i and j met
+                    last_meeting_period = 0
+                    for k in range(start_period - 1, -1, -1):
+                        if (bool_schedule[i, j, k] == 1) or (bool_schedule[j, i, k] == 1): # check both i,j and j,i in case of any issues with upper triangle
+                            last_meeting_period = max(last_meeting_period, k + 1)
+                weighting[i, j] = 1/penalty_weighting(abs(start_period - last_meeting_period), max_penalty=1, decay_rate=0.1) 
+        # forward looking penalising repeat meetings
+        # only relevant if n_periods > 1
+        if n_it > 1:
+            # introducing a penalty for multiple meetings
+            # To model X[i,j,k] * X[i,j,l] which is not DCP-compliant when X is boolean, you can introduce a new auxiliary binary variable Z[i,j,k,l] and enforce constraints that approximate this product:
+            Z = cp.Variable((n_people, n_people, n_it, n_it), boolean=True)
 
-        penalty_terms = []
+            for i in range(n_people):
+                for j in range(i):
+                    for k in range(n_it):
+                        for L in range(k + 1, n_it):
+                            # Enforce Z[i,j,k,l] = X[i,j,k] AND X[i,j,l]
+                            # linear constraints to approximate the AND operation
+                            constraints += [
+                                Z[i, j, k, L] <= X[i, j, k], 
+                                Z[i, j, k, L] <= X[i, j, L],
+                                Z[i, j, k, L] >= X[i, j, k] + X[i, j, L] - 1,
+                            ]
 
-        for i in range(n_people):
-            for j in range(i):
-                for k in range(n_to_schedule):
-                    for L in range(k + 1, n_to_schedule):
-                        penalty = penalty_weighting(abs(k - L), max_penalty=1, decay_rate=0.1)
-                        penalty_terms.append(penalty * Z[i, j, k, L])
+            penalty_terms = []
 
-        # ensure weighting same shape as X[:,:, :n_to_schedule] by duplicating rows and columns as needed
-        weighting_expanded = np.zeros((n_people, n_people, n_to_schedule))
-        for k in range(n_to_schedule):
-            weighting_expanded[:, :, k] = weighting
-        # objective function to include both past meetings penalty and future meetings penalty
-        objective = cp.Maximize(cp.sum(cp.multiply(weighting_expanded, X[:, :, :])) - cp.sum(penalty_terms))
+            for i in range(n_people):
+                for j in range(i):
+                    for k in range(n_it):
+                        for L in range(k + 1, n_it):
+                            penalty = penalty_weighting(abs(k - L), max_penalty=1, decay_rate=0.1)
+                            penalty_terms.append(penalty * Z[i, j, k, L])
 
-    else:
-        weighting_expanded = np.zeros((n_people, n_people, n_to_schedule))
-        for k in range(n_to_schedule):
-            weighting_expanded[:, :, k] = weighting
-        #  objective function to include past meetings penalty only
-        print("Single period, only including past meeting penalty")
-        objective = cp.Maximize(cp.sum(cp.multiply(weighting_expanded, X[:, :, :])))
+            # ensure weighting same shape as X[:,:, :n_to_schedule] by duplicating rows and columns as needed
+            weighting_expanded = np.zeros((n_people, n_people, n_it))
+            for k in range(n_it):
+                weighting_expanded[:, :, k] = weighting
+            # objective function to include both past meetings penalty and future meetings penalty
+            objective = cp.Maximize(cp.sum(cp.multiply(weighting_expanded, X[:, :, :])) - cp.sum(penalty_terms))
 
-    # Solve the problem
-    # warnings.filterwarnings('ignore')
+        else:
+            weighting_expanded = np.zeros((n_people, n_people, n_it))
+            for k in range(n_it):
+                weighting_expanded[:, :, k] = weighting
+            #  objective function to include past meetings penalty only
+            print("Single period, only including past meeting penalty")
+            objective = cp.Maximize(cp.sum(cp.multiply(weighting_expanded, X[:, :, :])))
 
-    problem = cp.Problem(objective, constraints)
-    problem.solve(verbose=verbose)
-    # to add a time limit, need to use solver specific options, therefore, need to be explicit as to what solver to use. 
+        # Solve the problem
+        # warnings.filterwarnings('ignore')
 
-    new_schedule = (X.value >= 0.5).astype(int)
-    bool_schedule[:, :, current_period - 1:current_period - 1 + n_to_schedule] = new_schedule
+        problem = cp.Problem(objective, constraints)
+        problem.solve(verbose=verbose)
+        # to add a time limit, need to use solver specific options, therefore, need to be explicit as to what solver to use. 
+
+        new_schedule = (X.value >= 0.5).astype(int)
+        bool_schedule[:, :, start_period - 1:start_period - 1 + n_it] = new_schedule
+        
+        counter += 1
 
     if save:
         # regenerate schedule dataframe
