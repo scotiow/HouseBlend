@@ -125,33 +125,7 @@ def create_initial_hansard(n_participants, parliament_name="example",
                  folderpath=folderpath,
                  filename=filename)
 
-    # # create availability_all dataframe
-    # availability_all = generate_availability_all(availability, contacts, period_dates)
-
     return contacts, period_dates, availability, schedule, generate_boolean_schedule(schedule)
-
-# def generate_availability_all(availability, contacts, period_dates):
-#     """
-#     Generate availability_all dataframe from availability dataframe.
-#     """
-#     availability_all = pd.DataFrame(np.ones((contacts.shape[0], period_dates.shape[0])),
-#                                     index=contacts.index,
-#                                     columns=period_dates.index)
-#     unavail_mask = availability == 0
-
-#     # Ensure we use the same column labels as availability_all. availability may use
-#     # "Period N" strings so try to map those to numeric period indices.
-#     if not all(col in availability_all.columns for col in unavail_mask.columns):
-#         try:
-#             mapped_cols = [int(str(col).split()[-1]) for col in unavail_mask.columns]
-#         except Exception:
-#             mapped_cols = list(unavail_mask.columns)
-#     else:
-#         mapped_cols = list(unavail_mask.columns)
-
-#     mask_df = pd.DataFrame(~unavail_mask.values, index=unavail_mask.index, columns=mapped_cols)
-#     availability_all.loc[unavail_mask.index, mapped_cols] = availability_all.loc[unavail_mask.index, mapped_cols].where(mask_df, other=0)
-#     return availability_all
 
 def save_hansard(contacts, dates, availability, schedule, parliament_name="example", folderpath=None, filename=None):
     """
@@ -235,8 +209,6 @@ def import_hansard(folderpath=None, filename=None, parliament_name="example",
         # fill any nans in availability with 1s, assuming that blank cells mean available
         availability = availability.fillna(1)
 
-        # availability_all = generate_availability_all(availability, contacts, dates)
-
         schedule = pd.read_excel(
             filepath,
             index_col=0,
@@ -291,7 +263,7 @@ def format_date_with_suffix(date):
     return date.strftime(f"%A {day}{suffix} %B %Y")
 
 
-def export_for_mailmerge2(contacts, bool_schedule, period, dates,
+def export_for_mailmerge(contacts, bool_schedule, period, dates,
                           save=False, folderpath=None, parliament_name='example', save_prefix="HouseBlend", subject=None):
     """
     Export data for a particular period to create two separate mail merge dataframes.
@@ -426,123 +398,6 @@ def export_for_mailmerge2(contacts, bool_schedule, period, dates,
             assistants_df.to_excel(writer, sheet_name='Assistants', index=False)
     
     return participants_df, assistants_df
-
-
-# def export_for_mailmerge(contacts, bool_schedule, period, dates,
-#                         save=False, folderpath=None, save_prefix="HouseBlend", subject=None):
-#     """
-#     Export data for a particular period to be used in an Office based Mail Merge.
-    
-#     See README for description of mailmerge usage.
-
-#     Parameters
-#     ----------
-#     contacts : TYPE
-#         DESCRIPTION.
-#     bool_schedule : TYPE
-#         DESCRIPTION.
-#     period : TYPE
-#         DESCRIPTION.
-#     dates : TYPE
-#         DESCRIPTION.
-#     save : TYPE, optional
-#         DESCRIPTION. The default is False.
-#     folderpath : TYPE, optional
-#         DESCRIPTION. The default is None.
-#     subject : TYPE, optional
-#         DESCRIPTION. The default is None.
-
-#     Returns
-#     -------
-#     None.
-
-#     """
-#     save_name = f'{save_prefix}_period_{period}_mailmerge.xlsx'
-#     if folderpath is None:
-#         save_path = os.path.join(parent_fullpath, save_name)
-#     else:
-#         save_path = os.path.join(folderpath, save_name)
-
-#     # row and column index of each meeting for period. Indexes correspond to list participants.
-#     idxs, jdxs = np.where(bool_schedule[:, :, period - 1] == 1)
-#     persons1 = contacts.index[idxs]
-#     persons2 = contacts.index[jdxs]
-
-#     # core meetings dataframe
-#     period_meetings = pd.DataFrame({'Person 1': persons1, 'Person 2': persons2,
-#                                     'Person 1 email': contacts.loc[persons1, "email"].values,
-#                                     'Person 2 email': contacts.loc[persons2, "email"].values,
-#                                     'Person 1 assistant': contacts.loc[persons1, "Assistant"].values,
-#                                     'Person 2 assistant': contacts.loc[persons2, "Assistant"].values,
-#                                     'Person 1 assistant email': contacts.loc[persons1, "Assistant email"].values,
-#                                     'Person 2 assistant email': contacts.loc[persons2, "Assistant email"].values,
-#                                     # 'All emails': ["{}; {}".format(a1, a2) for a1, a2 in zip(contacts.loc[persons1, "Assistant email"].values, contacts.loc[persons2, "Assistant email"].values)],
-#                                     'Start Date': dates.loc[period, "Start Date"].strftime('%d/%m/%Y'),
-#                                     'End Date': dates.loc[period, "End Date"].strftime('%d/%m/%Y')
-#                                     })
-    
-#     # mailto link
-#     period_meetings["Mailto Link"] = period_meetings.apply(
-#         lambda row: create_mailto_link(row, subject=subject),
-#         axis=1
-#         )
-
-#     # create columns containing only first names
-#     period_meetings["Person 1 first name"] = period_meetings['Person 1'].apply(
-#         lambda name: get_first_name(name)
-#     )
-#     period_meetings["Person 2 first name"] = period_meetings['Person 2'].apply(
-#         lambda name: get_first_name(name)
-#     )
-#     period_meetings["Person 1 assistant first name"] = period_meetings['Person 1 assistant'].apply(
-#         lambda name: get_first_name(name)
-#     )
-#     period_meetings["Person 2 assistant first name"] = period_meetings['Person 2 assistant'].apply(
-#         lambda name: get_first_name(name)
-#     )
-
-#     # create column containing all the emails of everyone involved in a meeting
-#     period_meetings["All emails"] = period_meetings.apply(
-#         lambda row: "; ".join([
-#             f"<{row['Person 1 email']}>",
-#             f"<{row['Person 2 email']}>",
-#             f"<{row['Person 1 assistant email']}>",
-#             f"<{row['Person 2 assistant email']}>"
-#         ]),
-#         axis=1
-#     )
-
-#     # Readable dates
-#     period_meetings["Start Date Long"] = format_date_with_suffix(dates.loc[period, "Start Date"])
-#     period_meetings["End Date Long"] = format_date_with_suffix(dates.loc[period, "End Date"])
-
-#     ## expand dataframe so there is a row for every person involved in a meeting (i.e. 4 rows for every meeting)
-#     ## this allows you to address each person individually which is a limitataion of office mailmerge.
-#     # Select the columns you want to keep constant
-#     base_columns = ['Person 1', 'Person 2', "Person 1 first name", "Person 2 first name",
-#                     'Person 1 assistant', 'Person 2 assistant', "Person 1 assistant first name", "Person 2 assistant first name",
-#                     'Start Date', 'End Date', "Start Date Long", "End Date Long",
-#                     "All emails", "Mailto Link"]
-
-#     # Melt the dataframe to turn the four email columns into a single 'mailto' column
-#     melted = pd.melt(
-#         period_meetings,
-#         id_vars=base_columns,
-#         value_vars=[
-#             'Person 1 email',
-#             'Person 2 email',
-#             'Person 1 assistant email',
-#             'Person 2 assistant email'
-#         ],
-#         var_name='Email Type',
-#         value_name='mailto'
-#     )
-
-#     if save:
-#         melted.to_excel(save_path)
-#     return melted
-    
-    
 
 def period_meeting_list(contacts, bool_schedule, period,
                         save=False, folderpath=None, parliament_name='example'):
@@ -725,7 +580,7 @@ def generate_boolean_schedule(schedule):
         bool_schedule[:, :, k] = bool_schedule[:, :, k] * lower_mask
     return bool_schedule
 
-def run_schedule_optimisation2(contacts, dates, availability, schedule, bool_schedule, n_to_schedule,
+def run_schedule_optimisation(contacts, dates, availability, schedule, bool_schedule, n_to_schedule,
                                current_period=1, verbose=False,
                                multiple_meetings='strict', save=False, folderpath=None,
                                parliament_name="example", filename=None, iterative_limit=3):
@@ -861,206 +716,39 @@ def run_schedule_optimisation2(contacts, dates, availability, schedule, bool_sch
 
     return bool_schedule
 
-    
-
-def run_schedule_optimisation(contacts, dates, availability, schedule, bool_schedule, n_to_schedule,
-                              current_period=1, verbose=False,
-                              multiple_meetings='strict', save=False, folderpath=None,
-                              parliament_name="example", filename=None):
-    """
-    Run the schedule optimisation using cvxpy.
-
-    The method overview is:
-    1) Define the decision variable X, a 3D boolean array where X[i,j,k] = 1 if person i meets person j in period k.
-    2) Define constraints to ensure that:
-        - No one meets themselves.
-        - Each person meets at most one other person per period.
-        - Participants are only scheduled in periods they are available.
-        - Historical meetings (if any) are preserved.
-    3) Define the objective function to maximise the total number of meetings while penalising repeat meetings based on the chosen strategy.
-    4) Solve the optimisation problem using a suitable solver.
-    5) Extract the optimal schedule from the decision variable.
-
-    Todo:
-    - decide if default is n_to_schedule = all remaining periods in season or 1 period
-    - reduce size of decision variable by only including remaining periods to schedule, to do this can calculate a penalty matrix beforehand that accounts for historic meetings,\
-          then multiply this by X in the objective function.
-
-
-
-
-    Parameters
-    ----------
-    contacts : DataFrame
-        Contacts dataframe with participant information.
-    dates : DataFrame
-        Dates dataframe with period dates.
-    availability : DataFrame
-        Availability dataframe indicating participant availability per period.
-    schedule : DataFrame
-        Schedule dataframe with current meeting schedule.
-    bool_schedule : ndarray
-        Boolean schedule array indicating current meeting schedule.
-    n_to_schedule : int
-        Number of periods to schedule.
-    current_period : int, optional
-        Current period number. The default is 1.
-    verbose : bool, optional
-        Whether to print solver output. The default is False.
-    multiple_meetings : str, optional
-        Strategy for handling multiple meetings. Options are 'strict', 'penalty', 'penaltytime'. The default is 'strict'.
-    save : bool, optional
-        Whether to save the updated schedule. The default is False.
-    folderpath : str, optional
-        Folder path to save the schedule. The default is None.
-    parliament_name : str, optional
-        Name of the parliament. The default is "example".
-    filename : str, optional
-        Filename to save the schedule. The default is None.
-
-    Returns
-    -------
-    bool_schedule : ndarray
-        Updated boolean schedule array.
-    """
-    # determine shape of schedule variable
-    n_people = contacts.shape[0]
-    
-    # determine the number of periods ahead to schedule
-    # if n_to_schedule is None, set to minimum required periods for everyone to meet everyone else
-    if isinstance(n_to_schedule, type(None)):
-        n_to_schedule = min_periods(n_people=n_people)  # the number periods (e.g. weeks if meetings are weekly) in the season
-    # total periods is the number to schedule plus those already fixed
-    total_periods = n_to_schedule + (current_period - 1)
-
-    # Define variable
-    X = cp.Variable((n_people, n_people, total_periods), boolean=True)
-
-    # define constraints
-    constraints = []
-
-    # Get upper triangle mask (including diagonal)
-    upper_mask = np.triu(np.ones((n_people, n_people)), k=0)
-
-    for k in range(total_periods):
-        # upper triangle will always be 0
-        constraints.append(cp.multiply(upper_mask, X[:, :, k]) == 0)
-
-        # each person can only meet once per week, each person is represented by a row and column
-        for i in range(n_people):
-            constraints.append(cp.sum(X[i, :, k]) + cp.sum(X[:, i, k]) <= 1)
-
-    # set unavailability
-    # do this by setting the sum of the corresponding row and column to 0?
-    for k in range(total_periods):
-        period_unavail_idxs = availability.index.get_indexer(availability[availability[f'Period {k + 1}'] == 0].index)
-        constraints.append(cp.sum(X[period_unavail_idxs, :, k]) == 0)
-        constraints.append(cp.sum(X[:, period_unavail_idxs, k]) == 0)
-
-    # set historic periods if running part way through
-    if current_period > 1:
-        for k in range(current_period - 1):
-            constraints.append(X[:, :, k] == bool_schedule[:, :, k])
-
-    # =============================================================================
-    #   Dealing with multiple meetings
-    #   multiple_meetings = strict:
-    #       only 1 meeting allowed
-    # =============================================================================
-
-    if multiple_meetings == "strict":
-        # Each meeting between two persons can only happen at most once
-        for i in range(n_people):
-            for j in range(n_people):
-                constraints.append(cp.sum(X[i, j, :]) <= 1)
-        objective = cp.Maximize(cp.sum(X))
-
-    elif multiple_meetings == 'penalty':
-        pass
-    
-    elif multiple_meetings == "penaltytime":
-
-        # =============================================================================
-        #   Relaxation to allow multiple meetings
-        # =============================================================================
-        # only relevant if n_periods > 1
-        if total_periods > 1:
-            # introducing a penalty for multiple meetings
-            # To model X[i,j,k] * X[i,j,l] which is not DCP-compliant when X is boolean, you can introduce a new auxiliary binary variable Z[i,j,k,l] and enforce constraints that approximate this product:
-            Z = cp.Variable((n_people, n_people, total_periods, total_periods), boolean=True)
-
-            for i in range(n_people):
-                for j in range(i):
-                    for k in range(total_periods):
-                        for L in range(k + 1, total_periods):
-                            # Enforce Z[i,j,k,l] = X[i,j,k] AND X[i,j,l]
-                            # linear constraints to approximate the AND operation
-                            constraints += [
-                                Z[i, j, k, L] <= X[i, j, k], 
-                                Z[i, j, k, L] <= X[i, j, L],
-                                Z[i, j, k, L] >= X[i, j, k] + X[i, j, L] - 1,
-                            ]
-
-            penalty_terms = []
-
-            for i in range(n_people):
-                for j in range(i):
-                    for k in range(total_periods):
-                        for L in range(k + 1, total_periods):
-                            penalty = penalty_weighting(abs(k - L), max_penalty=1, decay_rate=0.1)
-                            penalty_terms.append(penalty * Z[i, j, k, L])
-
-            # obective from V0.2.0
-            # objective = cp.Maximize(cp.sum(X) - cp.sum(cp.hstack(penalty_terms)))
-
-            # new objective for V0.3.0 that penalises there being no meetings
-            objective = cp.Maximize(cp.sum(X) - cp.sum(cp.hstack(penalty_terms)) - total_periods * ((total_periods * n_people**2) - cp.sum(X)))
-
-        else:
-            objective = cp.Maximize(cp.sum(X))
-
-    # Solve the problem
-    warnings.filterwarnings('ignore')
-
-    problem = cp.Problem(objective, constraints)
-    problem.solve(verbose=verbose)
-    # to add a time limit, need to use solver specific options, therefore, need to be explicit as to what solver to use. 
-
-    bool_schedule = (X.value >= 0.5).astype(int)
-
-    if save:
-        # regenerate schedule dataframe
-        schedule = generate_meeting_schedule(contacts, dates, availability, bool_schedule, parliament_name=parliament_name, folderpath=folderpath, filename=filename)
-
-        # save updated hansard
-        save_hansard(contacts, dates, availability, schedule,
-                     parliament_name=parliament_name,
-                     folderpath=folderpath,
-                     filename=filename)
-
-    return bool_schedule
-
 
 if __name__ == "__main__":
     # SETUP
-    # set below as per usage
-    current_period = 1  # generating for this period and future periods. A value greater than 1 will set preceeding periods as fixed e.g. they have already happened.
-    n_periods = 7  # set the horizon of the schedule (the term length). If set to None, this will be the minimum number of periods to ensure a meeting between every possible pair is arranged.
-    # parent_dir = 'example'
-
-    # # advanced - change if required
-    # parent_fullpath = os.path.join('../', parent_dir)
-
-    # # create directory if doesn't already exist
-    # os.makedirs(parent_fullpath, exist_ok=True)
+    n_to_schedule = 5  # total number of periods to schedule. Set to None for minimum number to satisfy all possible meetings.
+    current_period = 1  # the period from which to schedule. Set to 1 for first usage.
+    parliament_name = 'example'  # name of parliament - used to create folder for input/output files
 
     # import contacts dataframe
-    contacts, dates, availability, schedule, bool_schedule = import_hansard(test=4)
+    contacts, dates, availability, schedule, bool_schedule = import_hansard(parliament_name=parliament_name, test=6)
 
-    bool_schedule = run_schedule_optimisation(contacts, dates, availability, schedule, bool_schedule,
-                                               1, save=True)
+    # update_particpants if required
+    contacts, dates, availability, schedule, bool_schedule = participant_update(
+        contacts,
+        dates,
+        availability,
+        schedule,
+        bool_schedule,
+        parliament_name=parliament_name,
+        folderpath=None)
 
-    # meeting_schedule = generate_meeting_schedule(contacts, dates, availability, bool_schedule, save=True)
+    # run schedule optimisation
+    bool_schedule = run_schedule_optimisation(contacts, dates, availability, schedule, bool_schedule, n_to_schedule, save=True)
+    
+    # generate readable schedule dataframe from bool schedule and save to excel
+    meeting_schedule = generate_meeting_schedule(contacts, dates, availability, bool_schedule, save=True, parliament_name=parliament_name)
 
-    # all_meetings_period = period_meeting_list(contacts, bool_schedule, 1, save=False)
-    # all_meetings_period
+    # export for mail merge
+    export_for_mailmerge(
+        contacts,
+        bool_schedule,
+        1,
+        dates,
+        save=True,
+        parliament_name=parliament_name,
+        save_prefix='HouseBlend',
+        subject=None)
