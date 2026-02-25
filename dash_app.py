@@ -5,7 +5,7 @@ import tempfile
 from typing import Any
 
 import dash
-from dash import Dash, Input, Output, State, dcc, html
+from dash import Dash, Input, Output, State, dash_table, dcc, html
 import pandas as pd
 
 from HouseBlend.HouseBlend import HansardRepository, HouseBlendSession
@@ -57,6 +57,35 @@ app.layout = html.Div(
         dcc.Store(id="result-store"),
         dcc.Download(id="download-hansard"),
         dcc.Download(id="download-mailmerge"),
+        dcc.Tabs(
+            [
+                dcc.Tab(
+                    label="Current Period Matchups",
+                    children=[
+                        dash_table.DataTable(
+                            id="current-period-table",
+                            data=[],
+                            columns=[],
+                            page_size=20,
+                            style_table={"overflowX": "auto"},
+                        )
+                    ],
+                ),
+                dcc.Tab(
+                    label="Full Schedule",
+                    children=[
+                        dash_table.DataTable(
+                            id="full-schedule-table",
+                            data=[],
+                            columns=[],
+                            page_size=20,
+                            style_table={"overflowX": "auto"},
+                        )
+                    ],
+                ),
+            ],
+            style={"marginTop": "16px"},
+        ),
         html.Div(
             [
                 html.Strong("Privacy statement"),
@@ -213,7 +242,7 @@ def run_houseblend(
             session.build_schedule(save=False)
 
             repo = HansardRepository()
-            updated_hansard_name = f"{base_name}_updated.xlsx"
+            updated_hansard_name = input_name
             repo.save(
                 session.contacts,
                 session.dates,
@@ -232,15 +261,44 @@ def run_houseblend(
             mailmerge_bytes = _mailmerge_to_bytes(participants_df, assistants_df)
             mailmerge_name = f"{base_name}_period_{mailmerge}_mailmerge.xlsx"
 
+            current_period_df = session.schedule_builder.period_meeting_list(
+                session.contacts,
+                session.bool_schedule,
+                current,
+            )
+            full_schedule_df = session.schedule.copy().reset_index().rename(columns={"index": "Person"})
+
         payload = {
             "hansard_name": updated_hansard_name,
             "hansard_data": _encode_bytes(updated_hansard_bytes),
             "mailmerge_name": mailmerge_name,
             "mailmerge_data": _encode_bytes(mailmerge_bytes),
+            "current_period_rows": current_period_df.to_dict("records"),
+            "current_period_columns": [{"name": c, "id": c} for c in current_period_df.columns],
+            "full_schedule_rows": full_schedule_df.to_dict("records"),
+            "full_schedule_columns": [{"name": c, "id": c} for c in full_schedule_df.columns],
         }
         return "Optimisation complete. Use the download buttons.", payload
     except Exception as exc:
         return f"Error: {exc}", None
+
+
+@app.callback(
+    Output("current-period-table", "data"),
+    Output("current-period-table", "columns"),
+    Output("full-schedule-table", "data"),
+    Output("full-schedule-table", "columns"),
+    Input("result-store", "data"),
+)
+def update_results_tables(result_data: dict[str, Any] | None):
+    if not result_data:
+        return [], [], [], []
+    return (
+        result_data.get("current_period_rows", []),
+        result_data.get("current_period_columns", []),
+        result_data.get("full_schedule_rows", []),
+        result_data.get("full_schedule_columns", []),
+    )
 
 
 @app.callback(
