@@ -11,11 +11,26 @@ import pandas as pd
 from HouseBlend.HouseBlend import HansardRepository, HouseBlendSession
 
 
-app = Dash(__name__, title="HouseBlend Scheduler")
+app = Dash(__name__, title="HouseBlend Scheduler", assets_folder="img", assets_url_path="img")
 server = app.server
 
 app.layout = html.Div(
     [
+        html.Div(
+            html.Img(
+                src=app.get_asset_url("houseblendlogosmall.png"),
+                alt="HouseBlend logo",
+                style={"height": "128px", "maxWidth": "100%", "display": "block"},
+            ),
+            style={
+                "display": "inline-block",
+                "padding": "8px 12px",
+                "backgroundColor": "#ffffff",
+                "borderRadius": "10px",
+                "border": "1px solid #d9dee8",
+                "marginBottom": "12px",
+            },
+        ),
         html.H2("HouseBlend Scheduler"),
         html.P("Upload a Hansard workbook, run optimisation, and download outputs."),
         dcc.Upload(
@@ -66,7 +81,7 @@ app.layout = html.Div(
                             id="current-period-table",
                             data=[],
                             columns=[],
-                            page_size=20,
+                            page_size=100,
                             style_table={"overflowX": "auto"},
                         )
                     ],
@@ -78,7 +93,7 @@ app.layout = html.Div(
                             id="full-schedule-table",
                             data=[],
                             columns=[],
-                            page_size=20,
+                            page_size=100,
                             style_table={"overflowX": "auto"},
                         )
                     ],
@@ -281,6 +296,16 @@ def run_houseblend(
         return "Optimisation complete. Use the download buttons.", payload
     except Exception as exc:
         return f"Error: {exc}", None
+
+
+@app.callback(
+    Output("status", "children", allow_duplicate=True),
+    Input("run-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def set_status_running(n_clicks: int):
+    del n_clicks
+    return "Scheduling..."
 
 
 @app.callback(

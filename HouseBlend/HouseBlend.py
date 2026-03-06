@@ -701,8 +701,7 @@ class HouseBlendSession:
         )
         
         for participant in for_addition:
-            contacts_idx = state.contacts.index.get_indexer([participant])
-            state.availability = state.availability.append(pd.Series(1, index=state.availability.columns, name=participant))
+            state.availability.loc[participant, :] = 1
 
         return self
 
